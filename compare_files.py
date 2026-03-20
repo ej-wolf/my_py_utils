@@ -2,7 +2,10 @@ import time, fnmatch, io, contextlib
 from pathlib import Path
 from itertools import combinations, product
 
-CHUNK_SIZE = 1024 * 1024
+#* Imports from py_utils project
+from my_local_utils import collection
+
+CHUNK_SIZE = 1024*1024
 MAX_CHUNKS = 100000  # safety cap to avoid memory exhaustion
 
 def _short_name(p, maxlen=30):
@@ -159,6 +162,7 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
     return info
 
 
+#*****************************************************************************#
 
 def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
 
@@ -243,82 +247,108 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
 
     return report
 
+def filter_results(report, cutoff=0.05, criteria='difference'):
+    """ General filtering utility for report rows.
+        Rules:
+        numeric cutoff:
+            with criteria='difference' keep rows with similarity >= (1 - cutoff)
+            with criteria='similarity' keep rows with similarity >= cutoff
+            otherwise apply directly to the selected numeric field
+        string cutoff:
+            treated as a filename mask (Pathlib style) and applied to
+            file1 by default or file2 if criteria='file2'
+    """
+
+    filtered = []
+    for r in report:
+        #* string cutoff → filename mask
+        if isinstance(cutoff, str):
+            target = r.get(criteria if criteria in ('file1', 'file2') else 'file1', '')
+            if fnmatch.fnmatch(Path(target).name, cutoff):
+                filtered.append(r)
+        else:
+            #* numeric threshold
+            if criteria in ('difference', 'similarity'):
+                # TODO: Revisit partial-result filtering policy after more experiments.
+                complete = r.get('complete', r.get('info', {}).get('complete'))
+                if complete != 1.0:
+                    continue
+                value = r.get('similarity', r.get('info', {}).get('similarity'))
+                if value is None:
+                    continue
+                if criteria == 'difference' and value >= (1 - cutoff):
+                    filtered.append(r)
+                if criteria == 'similarity' and value >= cutoff:
+                    filtered.append(r)
+                continue
+
+            if criteria in r:
+                value = r.get(criteria)
+            else:
+                value = r.get('info', {}).get(criteria)
+
+            if value is None:
+                continue
+            if value >= cutoff:
+                filtered.append(r)
+    return filtered
 
 
+def sort_results(report, criteria='difference', order='increase', **kwargs):
+    """Sort report rows by selected criteria, with optional pre-filter by cutoff."""
 
-def print_cmp_info(report, threshold=0.05, sort_by=None, **kwargs):
+    cutoff = kwargs.get('cutoff', None)
+    entries = filter_results(report, cutoff=cutoff, criteria=criteria) if cutoff is not None else list(report)
+
+    desc_tokens = {'decrease', 'desc', 'descending', 'reverse'}
+    reverse = str(order).lower() in desc_tokens
+
+    if criteria == 'difference':
+        key_fn = lambda r: 1 - (r.get('similarity', r.get('info', {}).get('similarity', 0.0)) or 0.0)
+    elif criteria in ('file1', 'file2'):
+        key_fn = lambda r: Path(r.get(criteria, '')).name
+    else:
+        key_fn = lambda r: r.get(criteria, r.get('info', {}).get(criteria))
+
+    return sorted(entries, key=key_fn, reverse=reverse)
+
+
+def print_cmp_info(report, **kwargs):
 
     if not report or len(report) == 0:
         print("No comparison results to display.")
         return
 
-    entries = report
-    # if kwargs.get('sort', True):
-    #     entries = sorted(entries, key=lambda x: x['similarity'], reverse=True)
-    if sort_by is not None:
-        entries = sorted(entries, key=lambda x: x.get(sort_by, x.get("info", {}).get(sort_by)),
-                         reverse=kwargs.get('sort_desc', True))
+    entries = collection(report)
 
     mxl = kwargs.get('max_len', 30)
     # header = ["file1", "file2", "similarity", "Different bytes", "chunks num"]
-    header = list(report[0].keys())
+    header = list(entries[0].keys())
     print(f"{header[0]:{mxl}} {header[1]:{mxl}}{header[2]:^15} {header[3]:^12} {header[4]:>10}")
 
     printed_rows, total_size, total_similarity = 0, 0 , 0.0
 
     for r in entries:
+        print( f"{_short_name(r['file1'], mxl):{mxl}} "
+               f"{_short_name(r['file2'], mxl):{mxl}} "
+               f"{r['size']:^15,} "
+               f"{r['similarity']:^0.5f} "
+               f"{r['diff_bytes']:>12,} "
+               f"{r['chunks num']:6}"
+               )
 
-        if r['similarity'] >= threshold:
-            print(  f"{_short_name(r['file1'], mxl):{mxl}} "
-                    f"{_short_name(r['file2'], mxl):{mxl}} "                    
-                    f"{r['size']:^15,} "
-                    f"{r['similarity']:^0.5f} "                    
-                    f"{r['diff_bytes']:>12,} "
-                    f"{r['chunks num']:6}"
-                )
+        printed_rows += 1
+        total_size += r['size']
+        total_similarity += r['similarity']
 
-            printed_rows += 1
-            total_size += r['size']
-            total_similarity += r['similarity']
-
-    if kwargs.get('summary') and printed_rows > 0:
+    if kwargs.get('summary',True) and printed_rows > 0:
         print("-" * 100)
         print(f"rows: {printed_rows} | total size: {total_size:,} | avg size: {total_size/printed_rows:,.2f}" 
               f" | avg similarity: {total_similarity/printed_rows:.5f}")
 
-def filter_results(report, threshold, filter_by='similarity'):
-    """ General filtering utility for report rows.
-        Rules:
-        numeric threshold:
-            applied to the given field (default: similarity)
-        string threshold:
-            treated as a filename mask (Pathlib style) and applied to
-            file1 by default or file2 if filter_by='file2'
-    """
-
-    filtered = []
-    for r in report:
-        #* string threshold → filename mask
-        if isinstance(threshold, str):
-            target = r.get(filter_by if filter_by in ('file1','file2') else 'file1', '')
-            if fnmatch.fnmatch(Path(target).name, threshold):
-                filtered.append(r)
-        else:
-            #* numeric threshold
-            if filter_by in r:
-                value = r.get(filter_by)
-            else:
-                value = r.get('info', {}).get(filter_by)
-
-            if value is None:
-                continue
-            if filter_by == 'similarity':
-                if value >= (1 - threshold):
-                    filtered.append(r)
-            else:
-                if value >= threshold:
-                    filtered.append(r)
-    return filtered
+def quick_print(report, **kwargs):
+    r = sort_results(filter_results(report, kwargs.get('cutoff',0.05 )), criteria=kwargs.get('criteria','difference'))
+    print_cmp_info(r, summary=kwargs.get('summary',True ))
 
 
 # def test_cf_unit(test_root='test_data', case='all', cutoff=0.05):
@@ -424,7 +454,10 @@ if __name__ == '__main__':
     cases = (['try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'],
              ['try_03 vs try_04', test_root/'try_03',    test_root/'try_04'],
              ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
-             ['try_01 vs try_04', test_root/'try_01_cf',    test_root/'try_04'],)
-
+             ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],)
 
     test_cf_unit(cases=cases[0:2], cli_update=True)
+
+    f1 = Path("/mnt/local-data/Python/Projects/weSmart/data/json_cache-x/jsons_nf/cam3_5_4.json")
+    f2 = Path("/mnt/local-data/Python/Projects/weSmart/data/cam3_5_4.json")
+    print_cmp_info(compare_files(f1,f2))

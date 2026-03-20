@@ -268,7 +268,7 @@ def _load_log_lines(log_source):
 
 # ***** Collection casting ***** #
 def as_collection(x):
-    """  If x is a collection (list/tuple/set/dict/range/numpy array/torch tensor/etc.)
+    """  If x is a collection (list/tuple/set/range/numpy array/torch tensor/etc.)
     return it as-is. Otherwise, wrap it in a single-element list.
     (*) Strings/bytes are treated as scalars (wrapped).
     (*) Multi-dim numpy / torch arrays are returned as-is (no special handling).
@@ -292,14 +292,15 @@ def as_collection(x):
     except Exception:
         pass
 
-    collection_types = (list, tuple, set, frozenset, range, dict) + np_types + torch_types
+    # collection_types = (list, tuple, set, frozenset, range, dict) + np_types + torch_types
+    collection_types = (list, tuple, set, frozenset, range) + np_types + torch_types
 
     #* common concrete collection types
     if isinstance(x, collection_types):
         return x
 
     #* other iterables (e.g. generators); treat as collections and return as-is
-    if isinstance(x, Iterable):
+    if isinstance(x, Iterable) and not isinstance(x, dict):
         return x
 
     #* scalar fallback
