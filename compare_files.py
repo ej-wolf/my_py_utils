@@ -51,18 +51,9 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
 
     #* start loop over chunks of both files
     with open(f1, "rb") as a, open(f2, "rb") as b:
-
-        buf_a = bytearray(CHUNK_SIZE)
-        buf_b = bytearray(CHUNK_SIZE)
-
         while True:
-            n1 = a.readinto(buf_a)
-            n2 = b.readinto(buf_b)
-            if n1 == 0 and n2 == 0:
-                break
-
-            ba = memoryview(buf_a)[:n1] # a.read(CHUNK_SIZE)
-            bb = memoryview(buf_b)[:n2] # b.read(CHUNK_SIZE)
+            ba = a.read(CHUNK_SIZE)
+            bb = b.read(CHUNK_SIZE)
             if not ba and not bb:
                 break
 
