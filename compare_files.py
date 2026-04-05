@@ -12,12 +12,23 @@ def _short_name(p, maxlen=30):
     s = Path(p).name
     return (s[: maxlen - 3] + "...") if len(s) > maxlen else s
 
-def _empty_info():
-    return {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks num':0, 'chunks':[], 'size':0, 'note':''}
+def _empty_info(list_chunks=True):
+    info = {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks num':0, 'size':0, 'note':''}
+    if list_chunks:
+        info['chunks'] = []
+    else:
+        info['chunks'] = None
+    return info
 
-def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=False, compare_bytes=True)-> dict:
+def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
     progress = lambda: (offset/max_size)*100
+
+    #* Normalize arguments
+    cutoff = kwargs.pop('cutoff', 0.05)
+    update_cli = kwargs.pop('update_cli', False)
+    compare_bytes = kwargs.pop('compare_bytes', True)
+    list_chunks = kwargs.pop('list_chunks', True)
 
     f1, f2 = Path(f1), Path(f2)
 
@@ -25,7 +36,7 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
 
     max_size = max(size1, size2)
     if max_size == 0:
-        info = _empty_info()
+        info = _empty_info(list_chunks=list_chunks)
         info['similarity'] = 1.0
         return info
 
@@ -34,7 +45,7 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
 
     #*  ---- skip immediately if size difference already exceeds threshold
     if threshold is not None and size_diff > threshold:
-        info = _empty_info()
+        info = _empty_info(list_chunks=list_chunks)
         info['note'] = f"skipped due to size difference"
         return info
         # return { 'similarity': 0.0, 'Different bytes': size_diff, 'chunks num': 0,
@@ -46,7 +57,8 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
     searched_bytes = 0
     last_print = time.time()
     stopped_threshold = False
-    chunks = []
+    chunks = [] if list_chunks else None
+    chunk_count = 0
     current_chunk_start, current_chunk_end = None, None
 
     #* start loop over chunks of both files
@@ -58,7 +70,6 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
                 break
 
             max_len = max(len(ba), len(bb))
-
             #* identical chunks are equal in both modes
             if ba == bb:
                 offset += max_len
@@ -81,7 +92,6 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
                 offset += max_len
                 continue
 
-
             #* BYTE-BY-BYTE COMPARISON - if chunks differ, compare byte by byte
             for i in range(max_len):
                 pos = offset + i
@@ -99,8 +109,10 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
                         break
                 else:
                     # if current_chunk_start is not None:
-                    if current_chunk_start is not None and len(chunks) < MAX_CHUNKS:
-                        chunks.append((current_chunk_start, current_chunk_end))
+                    if current_chunk_start is not None:
+                        chunk_count += 1
+                        if list_chunks and len(chunks) < MAX_CHUNKS:
+                            chunks.append((current_chunk_start, current_chunk_end))
                         current_chunk_start = None
 
             if stopped_threshold:
@@ -115,20 +127,21 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
                     print(f"\rProgress: {progress():6.2f}%", end="", flush=True)
                     last_print = now
 
-        if current_chunk_start is not None and len(chunks) < MAX_CHUNKS:
-            chunks.append((current_chunk_start, current_chunk_end))
+        if current_chunk_start is not None:
+            chunk_count += 1
+            if list_chunks and len(chunks) < MAX_CHUNKS:
+                chunks.append((current_chunk_start, current_chunk_end))
 
-    chunk_list = []
+    chunk_list = [] if list_chunks else None
+    if list_chunks:
+        for i, (start, end) in enumerate(chunks, 1):
 
-    for i, (start, end) in enumerate(chunks, 1):
-
-        eof_flag = end >= max_size - 1
-
-        chunk_list.append({'chunk': f"{i:04d}",
-                           'from': f"{start:07d}",
-                           'to': f"{end:07d}" + (" (EOF)" if eof_flag else ""),
-                           'total_bytes': end - start + 1
-                            })
+            eof_flag = end >= max_size - 1
+            chunk_list.append({'chunk': f"{i:04d}",
+                               'from': f"{start:07d}",
+                               'to': f"{end:07d}" + (" (EOF)" if eof_flag else ""),
+                               'total_bytes': end - start + 1
+                                })
 
     complete = 1.0 if not stopped_threshold else searched_bytes / max_size
     similarity = 1 - (diff_bytes / max_size)
@@ -137,11 +150,10 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
     info = {'similarity': similarity,
             'complete': complete,
             'diff_bytes': diff_bytes,
-            'chunks num': len(chunk_list),
-            'chunks': chunk_list,
+            'chunks num': chunk_count,
+            'chunks':chunk_list,
             'size': max_size,
-            'note': None,
-            }
+            'note': None,}
     if update_cli and not stopped_threshold:
         #* overwrite the progress line with the final result
         print(f"\rSimilarity: {similarity: 0.5f}\n", end='', flush=True)
@@ -151,7 +163,6 @@ def compare_files(f1:str|Path, f2:str|Path, cutoff:float|None=.05, update_cli=Fa
         info['note'] = f"stopped by cutoff at byte {searched_bytes} ({complete:.3%})\n"
 
     return info
-
 
 #*****************************************************************************#
 
@@ -192,7 +203,6 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
     sz_dis = kwargs.get('size_dis', cutoff)
     report = []
     # threshold_similarity = 1 - cutoff
-
     # decide pair iterator
     if d2 is None:
         pairs = combinations(files1, 2)
@@ -220,7 +230,7 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
             info['note'] = f"skipped due to size difference"
         else:
             print(f"{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:")
-            info = compare_files(f1, f2, cutoff, update_cli=update_cli)
+            info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli)
 
         # similarity = info['similarity']
 
@@ -337,6 +347,7 @@ def print_cmp_info(report, **kwargs):
         print(f"rows: {printed_rows} | total size: {total_size:,} | avg size: {total_size/printed_rows:,.2f}" 
               f" | avg similarity: {total_similarity/printed_rows:.5f}")
 
+
 def quick_print(report, **kwargs):
     r = sort_results(filter_results(report, kwargs.get('cutoff',0.05 )), criteria=kwargs.get('criteria','difference'))
     print_cmp_info(r, summary=kwargs.get('summary',True ))
@@ -424,6 +435,7 @@ def test_cf_unit( cases, cutoff=0.05, **kwargs):
 
     return rows
 
+# 444(14,14,1)
 
 if __name__ == '__main__':
 
