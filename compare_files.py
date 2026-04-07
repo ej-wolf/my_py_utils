@@ -14,13 +14,6 @@ def _short_name(p, maxlen=30):
 
 def _empty_info(list_chunks=True):
     return {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks_num':0, 'size':0, 'note':''}
-# def _empty_info(list_chunks=True):
-#     info = {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks num':0, 'size':0, 'note':''}
-#     if list_chunks:
-#         info['chunks'] = []
-#     else:
-#         info['chunks'] = None
-#     return info
 
 def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
     """ Compare two files and return similarity, coverage, diff size, and chunk info."""
@@ -191,8 +184,6 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
         files1 = [f for f in d1.iterdir() if f.is_file()]
         files2 = [f for f in d2.iterdir() if f.is_file()] if d2 else None
 
-
-
     sz_dis = kwargs.get('size_dis', cutoff)
     report = []
     #* Pairs iterator
@@ -204,10 +195,8 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
     for f1, f2 in pairs:
         size1 = f1.stat().st_size
         size2 = f2.stat().st_size
-
         max_size = max(size1, size2)
         size_diff = abs(size1 - size2)
-
 
         #* quick size filter
         info = None
@@ -225,9 +214,7 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
                 'diff_bytes': info['diff_bytes'],
                 'chunks_num': info['chunks_num'],
                 'complete': info['complete'],
-                'info': info,
-                }
-
+                'info': info,}
         report.append(row)
 
     return report
@@ -342,11 +329,6 @@ def print_cmp_info(report, **kwargs):
 
 def list_pairs(report, **kwargs):
     """ Print full file paths for pairs whose exact difference is within cutoff."""
-    # entries = filter_results(report, cutoff=cutoff, criteria='difference')
-    # if not entries:
-    #     print("No matching pairs found.")
-    #     return
-    # for r in filter_results(report, cutoff=cutoff, criteria='difference'):
     #Todo; resolve the default cutoff issue
     for r in filter_results(report, **kwargs):
         print(f"Similarity: {r['similarity']}; Size: {r['size']}")
@@ -357,26 +339,12 @@ def list_pairs(report, **kwargs):
 
 def quick_print(report, **kwargs):
     """Filter, sort, and print a compact report in one call."""
-
     r = sort_results(filter_results(report, kwargs.get('cutoff',0.05 )), criteria=kwargs.get('criteria','difference'))
     print_cmp_info(r, summary=kwargs.get('summary',True ))
 
 
 def test_cf_unit( cases, cutoff=0.05, **kwargs):
-    """Run selected bundled directory comparisons in both compare_bytes modes."""
-
-    # test_root = Path(test_root)
-    # cases = {
-    #     'equal': [('try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf')],
-    #     'similar': [('try_03 vs try_04', test_root/'try_03', test_root/'try_04')],
-    #     'all': [
-    #         ('try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'),
-    #         ('try_03 vs try_04', test_root/'try_03', test_root/'try_04'),
-    #     ],
-    # }
-
-    # if case not in cases:
-    #     raise ValueError(f"Unknown case {case!r}. Expected one of: {', '.join(cases)}")
+    """ Run selected bundled directory comparisons in both compare_bytes modes."""
 
     def _files_by_name(path):
         return {p.name: p for p in path.iterdir() if p.is_file()}
@@ -421,8 +389,7 @@ def test_cf_unit( cases, cutoff=0.05, **kwargs):
                         'diff_bytes': diff_bytes,
                         'elapsed_sec': elapsed,
                         'left_only': len(left_only),
-                        'right_only': len(right_only),}
-                        )
+                        'right_only': len(right_only),} )
 
     print(f"{'case':28} {'byte mode':10} {'files':>5} {'ident':>5} "
           f"{'avg_sim':>10} {'min_sim':>10} {'diff_bytes':>12} {'sec':>8}")
@@ -435,15 +402,14 @@ def test_cf_unit( cases, cutoff=0.05, **kwargs):
               f"{row['avg_similarity']:10.5f} "
               f"{row['min_similarity']:10.5f} "
               f"{row['diff_bytes']:12,d} "
-              f"{row['elapsed_sec']:8.3f}"
-              )
+              f"{row['elapsed_sec']:8.3f}" )
 
         if row['left_only'] or row['right_only']:
             print(f"  unmatched files: left_only={row['left_only']} right_only={row['right_only']}")
 
     return rows
 
-# 444(14,14,1) -> 416(4,2,1)
+# 444(14,14,1) -> 412(4,2,1)
 
 if __name__ == '__main__':
 
