@@ -3,7 +3,7 @@ from pathlib import Path
 from itertools import combinations, product
 
 #* Imports from py_utils project
-from my_local_utils import collection
+from my_local_utils import collection, print_color
 
 CHUNK_SIZE = 1024*1024
 MAX_CHUNKS = 100000  # safety cap to avoid memory exhaustion
@@ -13,15 +13,17 @@ def _short_name(p, maxlen=30):
     return (s[: maxlen - 3] + "...") if len(s) > maxlen else s
 
 def _empty_info(list_chunks=True):
-    info = {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks num':0, 'size':0, 'note':''}
-    if list_chunks:
-        info['chunks'] = []
-    else:
-        info['chunks'] = None
-    return info
+    return {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks_num':0, 'size':0, 'note':''}
+# def _empty_info(list_chunks=True):
+#     info = {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks num':0, 'size':0, 'note':''}
+#     if list_chunks:
+#         info['chunks'] = []
+#     else:
+#         info['chunks'] = None
+#     return info
 
 def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
-
+    """ Compare two files and return similarity, coverage, diff size, and chunk info."""
     progress = lambda: (offset/max_size)*100
 
     #* Normalize arguments
@@ -36,7 +38,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
     max_size = max(size1, size2)
     if max_size == 0:
-        info = _empty_info(list_chunks=list_chunks)
+        info = _empty_info() #list_chunks=list_chunks)
         info['similarity'] = 1.0
         return info
 
@@ -45,11 +47,9 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
     #*  ---- skip immediately if size difference already exceeds threshold
     if threshold is not None and size_diff > threshold:
-        info = _empty_info(list_chunks=list_chunks)
+        info = _empty_info() # list_chunks=list_chunks)
         info['note'] = f"skipped due to size difference"
         return info
-        # return { 'similarity': 0.0, 'Different bytes': size_diff, 'chunks num': 0,
-        #          'chunks': [], 'size':max_size, 'note': "skipped_size_difference"}
 
     #* ---- initialize variables for comparison
     offset = 0
@@ -57,9 +57,9 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
     searched_bytes = 0
     last_print = time.time()
     stopped_threshold = False
-    chunks = [] if list_chunks else None
     chunk_count = 0
-    current_chunk_start, current_chunk_end = None, None
+    chunks = [] if list_chunks else None
+    chunk_start, chunk_end = None, None
 
     #* start loop over chunks of both files
     with open(f1, "rb") as a, open(f2, "rb") as b:
@@ -80,9 +80,9 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
             if not compare_bytes:
                 diff_bytes += max_len
 
-                if current_chunk_start is None:
-                    current_chunk_start = offset
-                current_chunk_end = offset + max_len - 1
+                if chunk_start is None:
+                    chunk_start = offset
+                chunk_end = offset + max_len - 1
                 searched_bytes = offset + max_len
 
                 if threshold is not None and diff_bytes > threshold:
@@ -101,19 +101,19 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
                 if b1 != b2:
                     diff_bytes += 1
-                    if current_chunk_start is None:
-                        current_chunk_start = pos
-                    current_chunk_end = pos
+                    if chunk_start is None:
+                        chunk_start = pos
+                    chunk_end = pos
                     if threshold is not None and diff_bytes > threshold:
                         stopped_threshold = True
                         break
                 else:
-                    # if current_chunk_start is not None:
-                    if current_chunk_start is not None:
+                    #* if current_chunk_start is not None:
+                    if chunk_start is not None:
                         chunk_count += 1
                         if list_chunks and len(chunks) < MAX_CHUNKS:
-                            chunks.append((current_chunk_start, current_chunk_end))
-                        current_chunk_start = None
+                            chunks.append((chunk_start, chunk_end))
+                        chunk_start = None
 
             if stopped_threshold:
                 break
@@ -123,14 +123,13 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
             if update_cli:
                 now = time.time()
                 if now - last_print >= 5:
-                    # percent = 100*(offset/max_size) if max_size else 100
                     print(f"\rProgress: {progress():6.2f}%", end="", flush=True)
                     last_print = now
 
-        if current_chunk_start is not None:
+        if chunk_start is not None:
             chunk_count += 1
             if list_chunks and len(chunks) < MAX_CHUNKS:
-                chunks.append((current_chunk_start, current_chunk_end))
+                chunks.append((chunk_start, chunk_end))
 
     chunk_list = [] if list_chunks else None
     if list_chunks:
@@ -139,18 +138,17 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
             eof_flag = end >= max_size - 1
             chunk_list.append({'chunk': f"{i:04d}",
                                'from': f"{start:07d}",
-                               'to': f"{end:07d}" + (" (EOF)" if eof_flag else ""),
+                               'to'  : f"{end:07d}" + (" (EOF)" if eof_flag else ""),
                                'total_bytes': end - start + 1
-                                })
+                               })
 
     complete = 1.0 if not stopped_threshold else searched_bytes / max_size
     similarity = 1 - (diff_bytes / max_size)
-    # similarity = round(similarity, 5)
 
     info = {'similarity': similarity,
             'complete': complete,
             'diff_bytes': diff_bytes,
-            'chunks num': chunk_count,
+            'chunks_num': chunk_count,
             'chunks':chunk_list,
             'size': max_size,
             'note': None,}
@@ -158,7 +156,6 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
         #* overwrite the progress line with the final result
         print(f"\rSimilarity: {similarity: 0.5f}\n", end='', flush=True)
     elif stopped_threshold:
-        # print(f"\r Skipped!\n", end='', flush=True)
         print(f"\rProgress: {100 * complete:6.2f}% -Skipped!\n")
         info['note'] = f"stopped by cutoff at byte {searched_bytes} ({complete:.3%})\n"
 
@@ -167,11 +164,12 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 #*****************************************************************************#
 
 def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
+    """ Compare files between one or two directories and return a row-based report."""
 
     d1 = Path(d1)
     d2 = Path(d2) if d2 else None
-    mask = kwargs.get("mask", None)
-    subdir = kwargs.get("subdir", False)
+    mask:str|None = kwargs.get("mask", None)
+    subdir:bool = kwargs.get("subdir", False)
 
     if not d1.is_dir():
         print(f"Error: {d1} is not a valid path.")
@@ -179,14 +177,7 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
     if d2 and not d2.is_dir():
         print(f"Error: {d2} is not a valid path.")
         return []
-    # files1 = [f for f in d1.iterdir() if f.is_file()]
-    # files2 = [f for f in d2.iterdir() if f.is_file()] if d2 else None
-    # if subdir:
-    #     files1 = [f for f in d1.rglob("*") if f.is_file()]
-    #     files2 = [f for f in d2.rglob("*") if f.is_file()] if d2 else None
-    # else:
-    #     files1 = [f for f in d1.iterdir() if f.is_file()]
-    #     files2 = [f for f in d2.iterdir() if f.is_file()] if d2 else None
+
     if   mask and subdir:
         files1 = [f for f in d1.rglob(mask) if f.is_file()]
         files2 = [f for f in d2.rglob(mask) if f.is_file()] if d2 else None
@@ -200,46 +191,39 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
         files1 = [f for f in d1.iterdir() if f.is_file()]
         files2 = [f for f in d2.iterdir() if f.is_file()] if d2 else None
 
+
+
     sz_dis = kwargs.get('size_dis', cutoff)
     report = []
-    # threshold_similarity = 1 - cutoff
-    # decide pair iterator
+    #* Pairs iterator
     if d2 is None:
         pairs = combinations(files1, 2)
     else:
         pairs = product(files1, files2)
 
     for f1, f2 in pairs:
-
         size1 = f1.stat().st_size
         size2 = f2.stat().st_size
 
         max_size = max(size1, size2)
         size_diff = abs(size1 - size2)
 
-        # skipped = False
-        info = None
 
         #* quick size filter
-        if sz_dis is not None and size_diff > max_size * sz_dis:
-            # skipped = True
-            # print(f"{_short_name(f1)} {_short_name(f2)} -> skipped (size)")
-            # info = {'similarity': 0.0, 'diff_bytes': size_diff,
-            #         'chunks num': 0, 'chunks': [], 'note': "skipped_size_difference"}
+        info = None
+        if sz_dis is not None and size_diff > max_size*sz_dis:
             info = _empty_info()
             info['note'] = f"skipped due to size difference"
         else:
             print(f"{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:")
             info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli)
 
-        # similarity = info['similarity']
-
         row = { 'file1': str(f1),
                 'file2': str(f2),
                 'size' : info['size'],
                 'similarity': info['similarity'],
                 'diff_bytes': info['diff_bytes'],
-                'chunks num': info['chunks num'],
+                'chunks_num': info['chunks_num'],
                 'complete': info['complete'],
                 'info': info,
                 }
@@ -248,17 +232,18 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
 
     return report
 
-def filter_results(report, cutoff=0.05, criteria='difference'):
+def filter_results(report, cutoff:float|int=0.05, criteria='difference'):
     """ General filtering utility for report rows.
-        Rules:
-        numeric cutoff:
-            with criteria='difference' keep rows with similarity >= (1 - cutoff)
-            with criteria='similarity' keep rows with similarity >= cutoff
-            otherwise apply directly to the selected numeric field
-        string cutoff:
-            treated as a filename mask (Pathlib style) and applied to
-            file1 by default or file2 if criteria='file2'
+        :param numeric cutoff: treated as cutoff for similarity/difference
+        :param string cutoff: treated as a filename mask (Pathlib style) file1 or file2
+        :param criteria:  'difference': keep rows with similarity >= (1 - cutoff)
+                          'similarity': keep exact rows with similarity >= cutoff
+                          'similarity_max': keep rows with similarity >= cutoff
+                          'file1', 'file2': Apply mask (Pathlib style) passed by cutoff
+                                           to file1 (default) or file2 if criteria='file2'
     """
+    criteria_map = {'dif': 'difference', 'sim': 'similarity', 'sim_max': 'similarity_max'}
+    criteria = criteria_map.get(criteria, criteria)
 
     filtered = []
     for r in report:
@@ -269,17 +254,18 @@ def filter_results(report, cutoff=0.05, criteria='difference'):
                 filtered.append(r)
         else:
             #* numeric threshold
-            if criteria in ('difference', 'similarity'):
-                # TODO: Revisit partial-result filtering policy after more experiments.
-                complete = r.get('complete', r.get('info', {}).get('complete'))
-                if complete != 1.0:
-                    continue
+            if criteria in ('difference', 'similarity', 'similarity_max'):
                 value = r.get('similarity', r.get('info', {}).get('similarity'))
                 if value is None:
                     continue
+                if criteria != 'similarity_max':
+                    # TODO: Revisit partial-result filtering policy after more experiments.
+                    complete = r.get('complete', r.get('info', {}).get('complete'))
+                    if complete != 1.0:
+                        continue
                 if criteria == 'difference' and value >= (1 - cutoff):
                     filtered.append(r)
-                if criteria == 'similarity' and value >= cutoff:
+                if criteria in ('similarity', 'similarity_max') and value >= cutoff:
                     filtered.append(r)
                 continue
 
@@ -296,7 +282,7 @@ def filter_results(report, cutoff=0.05, criteria='difference'):
 
 
 def sort_results(report, criteria='difference', order='increase', **kwargs):
-    """Sort report rows by selected criteria, with optional pre-filter by cutoff."""
+    """ Sort report rows by selected criteria, with optional pre-filter by cutoff """
 
     cutoff = kwargs.get('cutoff', None)
     entries = filter_results(report, cutoff=cutoff, criteria=criteria) if cutoff is not None else list(report)
@@ -304,8 +290,10 @@ def sort_results(report, criteria='difference', order='increase', **kwargs):
     desc_tokens = {'decrease', 'desc', 'descending', 'reverse'}
     reverse = str(order).lower() in desc_tokens
 
-    if criteria == 'difference':
+    if criteria in ('difference', 'dif'):
         key_fn = lambda r: 1 - (r.get('similarity', r.get('info', {}).get('similarity', 0.0)) or 0.0)
+    elif criteria in ('similarity', 'sim', 'similarity_max', 'sim_max'):
+        key_fn = lambda r: r.get('similarity', r.get('info', {}).get('similarity', 0.0)) or 0.0
     elif criteria in ('file1', 'file2'):
         key_fn = lambda r: Path(r.get(criteria, '')).name
     else:
@@ -314,8 +302,13 @@ def sort_results(report, criteria='difference', order='increase', **kwargs):
     return sorted(entries, key=key_fn, reverse=reverse)
 
 
-def print_cmp_info(report, **kwargs):
+#*****************************************************************************#
+#* Report printing
+#*****************************************************************************#
 
+def print_cmp_info(report, **kwargs):
+    """ Print a compact table view of comparison rows."""
+    #Todo: make better solution for empty report
     if not report or len(report) == 0:
         print("No comparison results to display.")
         return
@@ -335,25 +328,40 @@ def print_cmp_info(report, **kwargs):
                f"{r['size']:^15,} "
                f"{r['similarity']:^0.5f} "
                f"{r['diff_bytes']:>12,} "
-               f"{r['chunks num']:6}"
-               )
+               f"{r['chunks_num']:6}")
 
         printed_rows += 1
         total_size += r['size']
         total_similarity += r['similarity']
 
-    if kwargs.get('summary',True) and printed_rows > 0:
+    if kwargs.get('summary',True): #  and printed_rows > 0:
         print("-" * 100)
         print(f"rows: {printed_rows} | total size: {total_size:,} | avg size: {total_size/printed_rows:,.2f}" 
               f" | avg similarity: {total_similarity/printed_rows:.5f}")
 
 
+def list_pairs(report, **kwargs):
+    """ Print full file paths for pairs whose exact difference is within cutoff."""
+    # entries = filter_results(report, cutoff=cutoff, criteria='difference')
+    # if not entries:
+    #     print("No matching pairs found.")
+    #     return
+    # for r in filter_results(report, cutoff=cutoff, criteria='difference'):
+    #Todo; resolve the default cutoff issue
+    for r in filter_results(report, **kwargs):
+        print(f"Similarity: {r['similarity']}; Size: {r['size']}")
+        print(r['file1'])
+        print(r['file2'])
+        print()
+
+
 def quick_print(report, **kwargs):
+    """Filter, sort, and print a compact report in one call."""
+
     r = sort_results(filter_results(report, kwargs.get('cutoff',0.05 )), criteria=kwargs.get('criteria','difference'))
     print_cmp_info(r, summary=kwargs.get('summary',True ))
 
 
-# def test_cf_unit(test_root='test_data', case='all', cutoff=0.05):
 def test_cf_unit( cases, cutoff=0.05, **kwargs):
     """Run selected bundled directory comparisons in both compare_bytes modes."""
 
@@ -435,32 +443,18 @@ def test_cf_unit( cases, cutoff=0.05, **kwargs):
 
     return rows
 
-# 444(14,14,1)
+# 444(14,14,1) -> 416(4,2,1)
 
 if __name__ == '__main__':
 
     test_root =  Path("test_data")
-    # cases = {'equal':   [('try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf')],
-    #          'similar': [('try_03 vs try_04', test_root/'try_03', test_root/'try_04')],
-    #          'all': [
-    #         ('try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'),
-    #         ('try_03 vs try_04', test_root/'try_03', test_root/'try_04'),
-    #     ],
-    # }
+    tst_cases = (['try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'],
+                 ['try_03 vs try_04', test_root/'try_03',    test_root/'try_04'],
+                 ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
+                 ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],)
 
-    cases = {'try_01 vs try_02': [test_root/'try_01_cf', test_root/'try_02_cf'],
-             'try_03 vs try_04': [test_root/'try_03'   , test_root/'try_04'],
-             'try_01 vs try_02': [test_root/'try_01_cf', test_root/'try_02_cf'],
-             'try_03 vs try_04': [test_root/'try_03'   , test_root/'try_04'],
-    }
+    test_cf_unit(cases=tst_cases[0:2], cli_update=True)
 
-    cases = (['try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'],
-             ['try_03 vs try_04', test_root/'try_03',    test_root/'try_04'],
-             ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
-             ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],)
-
-    test_cf_unit(cases=cases[0:2], cli_update=True)
-
-    f1 = Path("/mnt/local-data/Python/Projects/weSmart/data/json_cache-x/jsons_nf/cam3_5_4.json")
-    f2 = Path("/mnt/local-data/Python/Projects/weSmart/data/cam3_5_4.json")
-    print_cmp_info(compare_files(f1,f2))
+    jf1 = Path("/mnt/local-data/Python/Projects/weSmart/data/json_cache-x/jsons_nf/cam3_5_4.json")
+    jf2 = Path("/mnt/local-data/Python/Projects/weSmart/data/cam3_5_4.json")
+    print_cmp_info(compare_files(jf1, jf2))
