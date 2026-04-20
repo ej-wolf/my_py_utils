@@ -1,9 +1,9 @@
-import time, fnmatch, io, contextlib
+import time, fnmatch, io, contextlib, pickle
 from pathlib import Path
 from itertools import combinations, product
 
 #* Imports from py_utils project
-from my_local_utils import collection, print_color
+from my_local_utils import collection, print_color, get_unique_name
 
 CHUNK_SIZE = 1024*1024
 MAX_CHUNKS = 100000  # safety cap to avoid memory exhaustion
@@ -295,6 +295,9 @@ def sort_results(report, criteria='difference', order='increase', **kwargs):
 
 def print_cmp_info(report, **kwargs):
     """ Print a compact table view of comparison rows."""
+    def _chunks_num(row:dict) -> int | None:
+        return row.get('chunks_num', row.get('chunks num'))
+
     #Todo: make better solution for empty report
     if not report or len(report) == 0:
         print("No comparison results to display.")
@@ -315,7 +318,7 @@ def print_cmp_info(report, **kwargs):
                f"{r['size']:^15,} "
                f"{r['similarity']:^0.5f} "
                f"{r['diff_bytes']:>12,} "
-               f"{r['chunks_num']:6}")
+               f"{_chunks_num(r):6}")
 
         printed_rows += 1
         total_size += r['size']
@@ -341,6 +344,64 @@ def quick_print(report, **kwargs):
     """Filter, sort, and print a compact report in one call."""
     r = sort_results(filter_results(report, kwargs.get('cutoff',0.05 )), criteria=kwargs.get('criteria','difference'))
     print_cmp_info(r, summary=kwargs.get('summary',True ))
+
+def save_report(report:list, path:Path|str=None, **kwargs):
+    """Save a report list as pickle with optional chunk stripping and key normalization."""
+
+    def normalize_keys(data: dict):
+        if legacy:
+            return
+        if 'chunks num' in data:
+            data['chunks_num'] = data.pop('chunks num')
+
+    def prepare_item(item):
+        if not isinstance(item, dict):
+            return item
+
+        row = dict(item)
+        normalize_keys(row)
+        info = row.get('info')
+        if isinstance(info, dict):
+            row['info'] = dict(info)
+            normalize_keys(row['info'])
+            if not save_chunks:
+                row['info']['chunks'] = None
+
+        if not save_chunks and 'chunks' in row:
+            row['chunks'] = None
+
+        return row
+
+    def resolve_target(path_value):
+        cwd = Path.cwd()
+        if path_value is None:
+            return get_unique_name(cwd / 'report.pcl')
+
+        p = Path(path_value)
+        if p.suffix:
+            return p if p.is_absolute() else cwd / p
+
+        if p.is_absolute() or len(p.parts) > 1:
+            base_dir = p if p.is_absolute() else cwd / p
+            return get_unique_name(base_dir / 'report.pcl')
+
+        name = p if p.suffix else p.with_suffix('.pcl')
+        return cwd / name
+
+    save_chunks = kwargs.pop('save_chunks', False)
+    legacy = kwargs.pop('legacy', False)
+    if kwargs:
+        unknown = ', '.join(sorted(kwargs))
+        raise TypeError(f"save_report() got unexpected keyword argument(s): {unknown}")
+
+    target = resolve_target(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = [prepare_item(item) for item in report]
+    with target.open('wb') as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    return target
 
 
 def test_cf_unit( cases, cutoff=0.05, **kwargs):
@@ -418,9 +479,5 @@ if __name__ == '__main__':
                  ['try_03 vs try_04', test_root/'try_03',    test_root/'try_04'],
                  ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
                  ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],)
-
     test_cf_unit(cases=tst_cases[0:2], cli_update=True)
 
-    jf1 = Path("/mnt/local-data/Python/Projects/weSmart/data/json_cache-x/jsons_nf/cam3_5_4.json")
-    jf2 = Path("/mnt/local-data/Python/Projects/weSmart/data/cam3_5_4.json")
-    print_cmp_info(compare_files(jf1, jf2))
