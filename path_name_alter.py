@@ -199,6 +199,142 @@ def fix_numbering(file_name: str, idx: int = -1, frmt:str = "") -> str:
 
 
 # -----------------------------------------
+#* Shift numeration
+# -----------------------------------------
+
+def _split_name_parts(file_name: str, include_extension: bool) -> tuple[str, str]:
+    """Split file name into editable text and preserved tail."""
+    if include_extension or '.' not in file_name:
+        return file_name, ''
+
+    base, ext = file_name.rsplit('.', 1)
+    return base, '.' + ext
+
+
+def _numeration_matches(text: str) -> list[re.Match]:
+    return list(re.finditer(r'\d+', text))
+
+
+def _normalize_num_index(index: int | str, count: int) -> int:
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        raise ValueError('index must be an int or numeric string')
+
+    if count == 0:
+        raise ValueError('No numeration found')
+
+    if index == 0:
+        raise ValueError('index=0 is not supported; use positive 1-based or negative indexing')
+
+    if index > 0:
+        pos = index - 1
+    else:
+        pos = count + index
+
+    if pos < 0 or pos >= count:
+        raise IndexError('index is out of numeration range')
+
+    return pos
+
+
+def _shift_num_str(num_str: str, shift: int, minus_char='-') -> str:
+    value = int(num_str) + int(shift)
+    width = len(num_str)
+
+    if value < 0:
+        if minus_char is None:
+            value = 0
+        else:
+            return f'{minus_char}{abs(value):0{width}d}'
+
+    return f'{value:0{width}d}'
+
+
+def _shift_name_numeration(file_name: str, shift: int = 1, index: int | str = -1, **kwargs) -> str:
+    """Shift one selected digit sequence inside a file name."""
+    include_extension = kwargs.get('include_extension', kwargs.get('include_extention', False))
+    minus_char = kwargs.get('minus_char', '-')
+
+    text, tail = _split_name_parts(file_name, include_extension)
+    matches = _numeration_matches(text)
+    if not matches:
+        return file_name
+
+    try:
+        pos = _normalize_num_index(index, len(matches))
+    except (ValueError, IndexError):
+        return file_name
+
+    match = matches[pos]
+    old_num = match.group(0)
+    new_num = _shift_num_str(old_num, shift, minus_char)
+    new_text = text[:match.start()] + new_num + text[match.end():]
+    return new_text + tail
+
+
+def shift_numeration(path, shift: int = 1, index: int | str = -1, **kwargs):
+    """Shift numerated file names for one path, a file collection, or a directory.
+
+    Positive `index` is 1-based from the start; negative `index` counts from the end.
+    By default only the stem is searched; pass `include_extension=True` to include the suffix.
+    """
+
+    def _rename_existing_file(file_path: Path):
+        old_name = file_path.name
+        new_name = _shift_name_numeration(old_name, shift=shift, index=index, **kwargs)
+        if new_name == old_name:
+            return file_path
+
+        new_path = file_path.with_name(new_name)
+        if new_path.exists():
+            if print2cli:
+                print(f'[SKIP exists] {file_path} -> {new_path}')
+            return file_path
+
+        file_path.rename(new_path)
+        if print2cli:
+            print(f'{file_path} -> {new_path}')
+        return new_path
+
+    def _shift_path_like(item):
+        item_path = Path(item)
+
+        if item_path.exists():
+            if item_path.is_dir():
+                raise ValueError(f'{item} is a directory; pass a single file or directory root')
+            return _rename_existing_file(item_path)
+
+        new_name = _shift_name_numeration(item_path.name, shift=shift, index=index, **kwargs)
+        new_path = item_path.with_name(new_name)
+        return str(new_path) if isinstance(item, str) else new_path
+
+    def _iter_dir_files(root: Path) -> list[Path]:
+        if sub_dirs:
+            return [p for p in root.rglob('*') if p.is_file()]
+        return [p for p in root.iterdir() if p.is_file()]
+
+    def _shift_dir(root: Path) -> list[Path]:
+        results = []
+        for file_path in _iter_dir_files(root):
+            results.append(_rename_existing_file(file_path))
+        return results
+
+    sub_dirs = kwargs.get('sub_dirs', False)
+    print2cli = kwargs.get('print2cli', True)
+
+    if isinstance(path, (list, tuple)):
+        shifted = [_shift_path_like(item) for item in path]
+        return type(path)(shifted)
+
+    path_obj = Path(path)
+    if path_obj.exists() and path_obj.is_dir():
+        return _shift_dir(path_obj)
+
+    return _shift_path_like(path)
+
+
+# -----------------------------------------
 #* sanitize_dir
 # -----------------------------------------
 
