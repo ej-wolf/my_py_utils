@@ -28,6 +28,25 @@ _NUMERIC_FIELDS = {'size', 'similarity', 'diff_bytes', 'complete', 'difference',
 _COMPARISON_OPS = {'==', '!=', '>', '>=', '<', '<='}
 _DEFULT_CUTOFF = 0.05
 
+
+def _pair_key(row: dict) -> tuple[str, str]:
+    return row.get('file1'), row.get('file2')
+
+
+def _canonical_row(row: dict) -> dict:
+    data = dict(row)
+    if 'chunks num' in data and 'chunks_num' not in data:
+        data['chunks_num'] = data.pop('chunks num')
+
+    info = data.get('info')
+    if isinstance(info, dict):
+        info = dict(info)
+        if 'chunks num' in info and 'chunks_num' not in info:
+            info['chunks_num'] = info.pop('chunks num')
+        data['info'] = info
+
+    return data
+
 class _ReportBase:
     def __init__(self, rows: list[dict]):
         self._rows = rows
@@ -45,6 +64,10 @@ class _ReportBase:
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}(rows={len(self)})'
 
+    def __add__(self, other):
+        merged = Report(list(self._rows))
+        return merged.append(other)
+
     def __getitem__(self, key):
         if isinstance(key, str):
             field = self._normalize_column(key)
@@ -52,7 +75,10 @@ class _ReportBase:
         if isinstance(key, slice):
             return ReportView(self._rows[key])
         if isinstance(key, int):
-            return self._rows[key]
+            if -len(self._rows) <= key < len(self._rows):
+                return self._rows[key]
+            print(f'[WARN] index {key} out of range: 0-{len(self._rows)} ')
+            return None
         raise TypeError(f'Unsupported index type: {type(key).__name__}')
 
     def where(self, field: str, op_or_value, value=None):
@@ -79,11 +105,37 @@ class _ReportBase:
     def save(self, path: Path | str | None = None, **kwargs):
         return save_report(self._rows, path=path, **kwargs)
 
+    def append(self, other):
+        rows_to_add = self._coerce_rows(other)
+        by_pair = {_pair_key(row): row for row in self._rows}
+
+        for row in rows_to_add:
+            key = _pair_key(row)
+            current = by_pair.get(key)
+            if current is None:
+                self._rows.append(row)
+                by_pair[key] = row
+                continue
+
+            if _canonical_row(current) != _canonical_row(row):
+                raise ValueError(f'Conflicting data for pair: {key}')
+
+        return self
+
     def _normalize_column(self, field: str) -> str:
         field = _COLUMN_ALIASES.get(field, field)
         if field not in _VISIBLE_FIELDS:
             raise KeyError(f'Unsupported column: {field}')
         return field
+
+    def _coerce_rows(self, other) -> list[dict]:
+        if isinstance(other, _ReportBase):
+            return other.rows
+        if isinstance(other, list):
+            if all(isinstance(row, dict) for row in other):
+                return other
+            raise TypeError('List input for append() must contain row dicts')
+        raise TypeError('append() expects Report, ReportView, or list[dict]')
 
     def _normalize_criteria(self, field: str) -> str:
         field = _COLUMN_ALIASES.get(field, field)
@@ -177,7 +229,7 @@ def as_report(rows: list[dict]) -> Report:
     return Report(rows)
 
 
-def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*'):
+def test_cr_unit(test_root:Path|str='test_data', tst_msk='*.*'):
     """Run a small smoke test for the report wrapper on a given directory tree."""
 
     def _check(name: str, cond: bool, detail=''):
@@ -224,6 +276,21 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*'):
     with TemporaryDirectory() as td:
         target = report.save(Path(td))
         _check('save report', target.is_file(), str(target))
+
+    row_a = {'file1': 'a', 'file2': 'b', 'size': 1, 'similarity': 1.0, 'diff_bytes': 0, 'complete': 1.0}
+    row_b = {'file1': 'c', 'file2': 'd', 'size': 2, 'similarity': 0.9, 'diff_bytes': 1, 'complete': 1.0}
+    merged = Report([dict(row_a)]).append(Report([dict(row_a), dict(row_b)]))
+    _check('append dedup merge', len(merged) == 2)
+
+    plus_merged = Report([dict(row_a)]) + Report([dict(row_a), dict(row_b)])
+    _check('plus matches append', len(plus_merged) == 2 and plus_merged['file1'] == merged['file1'])
+
+    conflict_ok = False
+    try:
+        Report([dict(row_a)]).append([dict(row_a), {**row_a, 'similarity': 0.5}])
+    except ValueError:
+        conflict_ok = True
+    _check('append conflict guard', conflict_ok)
 
     passed = sum(item['ok'] for item in checks)
 

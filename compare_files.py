@@ -156,6 +156,37 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
 #*****************************************************************************#
 
+def _compare_pairs(pairs, cutoff=0.05, update_cli=True, **kwargs):
+    """ Compare prepared file pairs and return report rows."""
+    sz_dis = kwargs.pop('size_dis', cutoff)
+    report = []
+
+    for f1, f2 in pairs:
+        size1 = f1.stat().st_size
+        size2 = f2.stat().st_size
+        max_size = max(size1, size2)
+        size_diff = abs(size1 - size2)
+
+        info = None
+        if sz_dis is not None and size_diff > max_size * sz_dis:
+            info = _empty_info()
+            info['note'] = 'skipped due to size difference'
+        else:
+            print(f"{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:")
+            info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli, **kwargs)
+
+        row = {'file1': str(f1), 'file2': str(f2),
+               'size': info['size'],
+               'similarity': info['similarity'],
+               'diff_bytes': info['diff_bytes'],
+               'chunks_num': info['chunks_num'],
+               'complete': info['complete'],
+               'info': info,}
+        report.append(row)
+
+    return report
+
+
 def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
     """ Compare files between one or two directories and return a row-based report."""
 
@@ -184,40 +215,37 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
         files1 = [f for f in d1.iterdir() if f.is_file()]
         files2 = [f for f in d2.iterdir() if f.is_file()] if d2 else None
 
-    sz_dis = kwargs.get('size_dis', cutoff)
-    report = []
-    #* Pairs iterator
-    if d2 is None:
-        pairs = combinations(files1, 2)
-    else:
-        pairs = product(files1, files2)
+    pairs = combinations(files1, 2) if d2 is None else product(files1, files2)
+    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
 
-    for f1, f2 in pairs:
-        size1 = f1.stat().st_size
-        size2 = f2.stat().st_size
-        max_size = max(size1, size2)
-        size_diff = abs(size1 - size2)
 
-        #* quick size filter
-        info = None
-        if sz_dis is not None and size_diff > max_size*sz_dis:
-            info = _empty_info()
-            info['note'] = f"skipped due to size difference"
-        else:
-            print(f"{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:")
-            info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli)
+def compare_lists(files1, files2=None, cutoff=0.05, update_cli=True, **kwargs):
+    """ Compare file-path iterables and return the same row format as compare_dirs()."""
 
-        row = { 'file1': str(f1),
-                'file2': str(f2),
-                'size' : info['size'],
-                'similarity': info['similarity'],
-                'diff_bytes': info['diff_bytes'],
-                'chunks_num': info['chunks_num'],
-                'complete': info['complete'],
-                'info': info,}
-        report.append(row)
+    def _as_file_list(items):
+        paths = []
+        for item in collection(items):
+            p = Path(item)
+            if not p.is_file():
+                print(f'Error: {p} is not a valid file path.')
+                return None
+            paths.append(p)
+        return paths
 
-    return report
+    files1 = _as_file_list(files1)
+    has_second = files2 is not None
+    files2 = _as_file_list(files2) if has_second else None
+    if files1 is None or (has_second and files2 is None):
+        return []
+
+    mask:str|None = kwargs.get('mask', None)
+
+    if mask:
+        files1 = [f for f in files1 if fnmatch.fnmatch(f.name, mask)]
+        files2 = [f for f in files2 if fnmatch.fnmatch(f.name, mask)] if files2 else None
+
+    pairs = combinations(files1, 2) if files2 is None else product(files1, files2)
+    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
 
 def filter_results(report, cutoff:float|int=0.05, criteria='difference'):
     """ General filtering utility for report rows.
@@ -470,7 +498,7 @@ def test_cf_unit( cases, cutoff=0.05, **kwargs):
 
     return rows
 
-# 444(14,14,1) -> 412(4,2,1)
+# 444(14,14,1) -> 412(4,2,1) -> 502
 
 if __name__ == '__main__':
 
@@ -480,4 +508,3 @@ if __name__ == '__main__':
                  ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
                  ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],)
     test_cf_unit(cases=tst_cases[0:2], cli_update=True)
-

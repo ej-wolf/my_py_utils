@@ -2,10 +2,49 @@ import re
 from pathlib import Path
 from typing import Callable
 
+from my_local_utils import get_unique_name
 
 # -----------------------------------------
 #* Helper functions
 # -----------------------------------------
+
+def _normalize_overwrite_policy(policy: str) -> str:
+    aliases = {'overwite': 'overwrite'}
+    policy = aliases.get(policy, policy)
+    if policy not in {'overwrite', 'skip', 'rename'}:
+        raise ValueError("overwrite_policy must be 'overwrite', 'skip', or 'rename'")
+    return policy
+
+
+def _rename_file_path(file_path: Path, new_name: str, overwrite_policy='skip', print2cli=True) -> Path:
+    old_name = file_path.name
+    if new_name == old_name:
+        return file_path
+
+    overwrite_policy = _normalize_overwrite_policy(overwrite_policy)
+    new_path = file_path.with_name(new_name)
+
+    if new_path.exists():
+        if new_path.is_dir():
+            if print2cli:
+                print(f'[SKIP dir] {file_path} -> {new_path}')
+            return file_path
+
+        if overwrite_policy == 'skip':
+            if print2cli:
+                print(f'[SKIP exists] {file_path} -> {new_path}')
+            return file_path
+
+        if overwrite_policy == 'rename':
+            new_path = get_unique_name(new_path)
+        else:
+            new_path.unlink()
+
+    file_path.rename(new_path)
+    if print2cli:
+        print(f'{file_path} -> {new_path}')
+    return new_path
+
 
 def _strip_side(s: str, exclude: list[str], is_start: bool) -> str:
 
@@ -109,6 +148,58 @@ def replace_string(file_name: str, sub_str_1 : str|list, sub_str_2:str|list) -> 
         file_name = file_name.replace(s1, s2)
 
     return file_name
+
+
+def replace_string_in_files(files, org_str: str, new_str: str, **kwargs):
+    """Rename files by replacing a substring in their names."""
+
+    def _replace_existing_file(file_path: Path):
+        old_name = file_path.name
+        if org_str not in old_name:
+            return file_path
+
+        new_name = replace_string(old_name, org_str, new_str)
+        return _rename_file_path(file_path, new_name, overwrite_policy=overwrite_policy, print2cli=print2cli)
+
+    def _replace_path_like(item):
+        item_path = Path(item)
+
+        if item_path.exists():
+            if item_path.is_dir():
+                raise ValueError(f'{item} is a directory; pass a single file or directory root')
+            return _replace_existing_file(item_path)
+
+        if org_str not in item_path.name:
+            return item
+
+        new_name = replace_string(item_path.name, org_str, new_str)
+        new_path = item_path.with_name(new_name)
+        return str(new_path) if isinstance(item, str) else new_path
+
+    def _iter_dir_files(root: Path) -> list[Path]:
+        if sub_dirs:
+            return [p for p in root.rglob('*') if p.is_file()]
+        return [p for p in root.iterdir() if p.is_file()]
+
+    def _replace_dir(root: Path) -> list[Path]:
+        results = []
+        for file_path in _iter_dir_files(root):
+            results.append(_replace_existing_file(file_path))
+        return results
+
+    overwrite_policy = kwargs.get('overwrite_policy', 'skip')
+    print2cli = kwargs.get('print2cli', True)
+    sub_dirs = kwargs.get('sub_dirs', kwargs.get('sub_dir', False))
+
+    if isinstance(files, (list, tuple)):
+        replaced = [_replace_path_like(item) for item in files]
+        return type(files)(replaced)
+
+    files_path = Path(files)
+    if files_path.exists() and files_path.is_dir():
+        return _replace_dir(files_path)
+
+    return _replace_path_like(files)
 
 
 # -----------------------------------------
@@ -215,7 +306,7 @@ def _numeration_matches(text: str) -> list[re.Match]:
     return list(re.finditer(r'\d+', text))
 
 
-def _normalize_num_index(index: int | str, count: int) -> int:
+def _normalize_num_index(index:int|str, count:int)-> int:
     try:
         index = int(index)
     except (TypeError, ValueError):
@@ -223,7 +314,6 @@ def _normalize_num_index(index: int | str, count: int) -> int:
 
     if count == 0:
         raise ValueError('No numeration found')
-
     if index == 0:
         raise ValueError('index=0 is not supported; use positive 1-based or negative indexing')
 
@@ -274,28 +364,15 @@ def _shift_name_numeration(file_name: str, shift: int = 1, index: int | str = -1
 
 
 def shift_numeration(path, shift: int = 1, index: int | str = -1, **kwargs):
-    """Shift numerated file names for one path, a file collection, or a directory.
-
+    """ Shift numerated file names for one path, a file collection, or a directory.
     Positive `index` is 1-based from the start; negative `index` counts from the end.
-    By default only the stem is searched; pass `include_extension=True` to include the suffix.
+    By default, only the stem is searched; pass `include_extension=True` to include the suffix.
     """
 
     def _rename_existing_file(file_path: Path):
         old_name = file_path.name
         new_name = _shift_name_numeration(old_name, shift=shift, index=index, **kwargs)
-        if new_name == old_name:
-            return file_path
-
-        new_path = file_path.with_name(new_name)
-        if new_path.exists():
-            if print2cli:
-                print(f'[SKIP exists] {file_path} -> {new_path}')
-            return file_path
-
-        file_path.rename(new_path)
-        if print2cli:
-            print(f'{file_path} -> {new_path}')
-        return new_path
+        return _rename_file_path(file_path, new_name, overwrite_policy=overwrite_policy, print2cli=print2cli)
 
     def _shift_path_like(item):
         item_path = Path(item)
@@ -309,7 +386,7 @@ def shift_numeration(path, shift: int = 1, index: int | str = -1, **kwargs):
         new_path = item_path.with_name(new_name)
         return str(new_path) if isinstance(item, str) else new_path
 
-    def _iter_dir_files(root: Path) -> list[Path]:
+    def _iter_dir_files(root:Path) -> list[Path]:
         if sub_dirs:
             return [p for p in root.rglob('*') if p.is_file()]
         return [p for p in root.iterdir() if p.is_file()]
@@ -321,6 +398,7 @@ def shift_numeration(path, shift: int = 1, index: int | str = -1, **kwargs):
         return results
 
     sub_dirs = kwargs.get('sub_dirs', False)
+    overwrite_policy = kwargs.get('overwrite_policy', 'skip')
     print2cli = kwargs.get('print2cli', True)
 
     if isinstance(path, (list, tuple)):
