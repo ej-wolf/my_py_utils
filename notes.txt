@@ -1,0 +1,28 @@
+
+#ToDo
+1) V Done!  make [int], ['name'] more robust, return None with warning if not found
+  rather than throwing an error
+
+2) V Done! enable adding reports : report_01 + report_02 = report_03
+
+3) v check if possible to filter low similarity matches, e.g. < 0.05
+
+4) Report class: add option to get 'file1'/'file2' set
+
+5) check option to compare inside zip files
+
+6) sort/filter by complete
+
+7) check the override policy
+
+8) Check if complete is relative or binary
+
+9) Report.save: if the given file name has no extension, and the parent exist, add .pkl instead of creating a dir
+
+10) add option for to record only if there is  a minimum similarity
+
+11) add option to search few dirs as a list or pattern
+
+file_actions.py
+1) add ':' operator to fix_numbering
+
