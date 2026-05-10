@@ -159,6 +159,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 def _compare_pairs(pairs, cutoff=0.05, update_cli=True, **kwargs):
     """ Compare prepared file pairs and return report rows."""
     sz_dis = kwargs.pop('size_dis', cutoff)
+    min_complete = None if cutoff is None else min(1.0, 1.5 * cutoff)
     report = []
 
     for f1, f2 in pairs:
@@ -168,7 +169,7 @@ def _compare_pairs(pairs, cutoff=0.05, update_cli=True, **kwargs):
         size_diff = abs(size1 - size2)
 
         info = None
-        if sz_dis is not None and size_diff > max_size * sz_dis:
+        if sz_dis is not None and size_diff > max_size*sz_dis:
             info = _empty_info()
             info['note'] = 'skipped due to size difference'
         else:
@@ -182,38 +183,70 @@ def _compare_pairs(pairs, cutoff=0.05, update_cli=True, **kwargs):
                'chunks_num': info['chunks_num'],
                'complete': info['complete'],
                'info': info,}
-        report.append(row)
+        # Drop rows that diverged almost immediately relative to the active cutoff.
+        if min_complete is None or row['complete'] >= min_complete:
+            report.append(row)
 
     return report
 
 
-def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
-    """ Compare files between one or two directories and return a row-based report."""
+def _collect_dir_files(paths, mask=None, subdir=False):
+    """Collect files from one directory, dir collection, or dir mask."""
 
-    d1 = Path(d1)
-    d2 = Path(d2) if d2 else None
+    def _expand_dir_item(item) -> list[Path] | None:
+        item_str = str(item)
+        has_wildcard = any(ch in item_str for ch in '*?[')
+        if not has_wildcard:
+            p = Path(item)
+            if not p.is_dir():
+                print(f'Error: {p} is not a valid path.')
+                return None
+            return [p]
+
+        pattern = Path(item)
+        if pattern.is_absolute():
+            root = Path(pattern.anchor)
+            rel_pattern = Path(*pattern.parts[1:]).as_posix()
+        else:
+            root = Path.cwd()
+            rel_pattern = pattern.as_posix()
+
+        matches = [p for p in root.glob(rel_pattern) if p.is_dir()]
+        if not matches:
+            print(f'Error: no directories match pattern {item!r}.')
+            return None
+        return matches
+
+    dirs = []
+    for item in collection(paths):
+        expanded = _expand_dir_item(item)
+        if expanded is None:
+            return None
+        dirs.extend(expanded)
+
+    files = []
+    for d in dirs:
+        if mask and subdir:
+            files.extend(f for f in d.rglob(mask) if f.is_file())
+        elif mask and not subdir:
+            files.extend(f for f in d.glob(mask) if f.is_file())
+        elif not mask and subdir:
+            files.extend(f for f in d.rglob('*') if f.is_file())
+        else:
+            files.extend(f for f in d.iterdir() if f.is_file())
+    return files
+
+
+def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
+    """ Compare files between one/two dirs or dir collections and return report rows."""
+
     mask:str|None = kwargs.get("mask", None)
     subdir:bool = kwargs.get("subdir", False)
 
-    if not d1.is_dir():
-        print(f"Error: {d1} is not a valid path.")
+    files1 = _collect_dir_files(d1, mask=mask, subdir=subdir)
+    files2 = _collect_dir_files(d2, mask=mask, subdir=subdir) if d2 else None
+    if files1 is None or (d2 and files2 is None):
         return []
-    if d2 and not d2.is_dir():
-        print(f"Error: {d2} is not a valid path.")
-        return []
-
-    if   mask and subdir:
-        files1 = [f for f in d1.rglob(mask) if f.is_file()]
-        files2 = [f for f in d2.rglob(mask) if f.is_file()] if d2 else None
-    elif mask and not subdir:
-        files1 = [f for f in d1.glob(mask) if f.is_file()]
-        files2 = [f for f in d2.glob(mask) if f.is_file()] if d2 else None
-    elif not mask and subdir:
-        files1 = [f for f in d1.rglob("*") if f.is_file()]
-        files2 = [f for f in d2.rglob("*") if f.is_file()] if d2 else None
-    elif not mask and not subdir:
-        files1 = [f for f in d1.iterdir() if f.is_file()]
-        files2 = [f for f in d2.iterdir() if f.is_file()] if d2 else None
 
     pairs = combinations(files1, 2) if d2 is None else product(files1, files2)
     return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
@@ -254,6 +287,7 @@ def filter_results(report, cutoff:float|int=0.05, criteria='difference'):
         :param criteria:  'difference': keep rows with similarity >= (1 - cutoff)
                           'similarity': keep exact rows with similarity >= cutoff
                           'similarity_max': keep rows with similarity >= cutoff
+                          'complete': keep rows with searched coverage >= cutoff
                           'file1', 'file2': Apply mask (Pathlib style) passed by cutoff
                                            to file1 (default) or file2 if criteria='file2'
     """
@@ -297,7 +331,9 @@ def filter_results(report, cutoff:float|int=0.05, criteria='difference'):
 
 
 def sort_results(report, criteria='difference', order='increase', **kwargs):
-    """ Sort report rows by selected criteria, with optional pre-filter by cutoff """
+    """ Sort report rows by selected criteria, with optional pre-filter by cutoff.
+        Use criteria='complete' to sort by searched coverage before cutoff/EOF.
+    """
 
     cutoff = kwargs.get('cutoff', None)
     entries = filter_results(report, cutoff=cutoff, criteria=criteria) if cutoff is not None else list(report)
@@ -323,9 +359,6 @@ def sort_results(report, criteria='difference', order='increase', **kwargs):
 
 def print_cmp_info(report, **kwargs):
     """ Print a compact table view of comparison rows."""
-    def _chunks_num(row:dict) -> int | None:
-        return row.get('chunks_num', row.get('chunks num'))
-
     #Todo: make better solution for empty report
     if not report or len(report) == 0:
         print("No comparison results to display.")
@@ -334,9 +367,7 @@ def print_cmp_info(report, **kwargs):
     entries = collection(report)
 
     mxl = kwargs.get('max_len', 30)
-    # header = ["file1", "file2", "similarity", "Different bytes", "chunks num"]
-    header = list(entries[0].keys())
-    print(f"{header[0]:{mxl}} {header[1]:{mxl}}{header[2]:^15} {header[3]:^12} {header[4]:>10}")
+    print(f"{'file1':{mxl}} {'file2':{mxl}}{'size':^15} {'similarity':^12} {'complete':>10} {'diff_bytes':>12}")
 
     printed_rows, total_size, total_similarity = 0, 0 , 0.0
 
@@ -345,8 +376,8 @@ def print_cmp_info(report, **kwargs):
                f"{_short_name(r['file2'], mxl):{mxl}} "
                f"{r['size']:^15,} "
                f"{r['similarity']:^0.5f} "
-               f"{r['diff_bytes']:>12,} "
-               f"{_chunks_num(r):6}")
+               f"{r['complete']:>10.3f} "
+               f"{r['diff_bytes']:>12,}")
 
         printed_rows += 1
         total_size += r['size']
@@ -403,18 +434,17 @@ def save_report(report:list, path:Path|str=None, **kwargs):
     def resolve_target(path_value):
         cwd = Path.cwd()
         if path_value is None:
-            return get_unique_name(cwd / 'report.pcl')
+            return get_unique_name(cwd / 'report.pkl')
 
         p = Path(path_value)
         if p.suffix:
             return p if p.is_absolute() else cwd / p
 
-        if p.is_absolute() or len(p.parts) > 1:
-            base_dir = p if p.is_absolute() else cwd / p
-            return get_unique_name(base_dir / 'report.pcl')
+        p = p if p.is_absolute() else cwd / p
+        if p.exists() and p.is_dir():
+            return get_unique_name(p / 'report.pkl')
 
-        name = p if p.suffix else p.with_suffix('.pcl')
-        return cwd / name
+        return p.with_suffix('.pkl')
 
     save_chunks = kwargs.pop('save_chunks', False)
     legacy = kwargs.pop('legacy', False)

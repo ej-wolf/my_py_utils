@@ -8,15 +8,16 @@
     report.where('similarity', '>', 0.9)['file1']:
                                     Select rows subset with similarity above 0.9,
                                     then return list of 'file1'paths of this subset
+    report.filter(0.8, criteria='complete')
+                                    Keep rows where at least 80% of the file was searched.
     report.sort(criteria='sim_max', order='decrease').print()
                                     Sort rows by max similarity and print the result table.
     report.save('report.pcl')   :   Save the wrapped report as pickle.
 """
 
+import fnmatch, io, contextlib
 from pathlib import Path
 from typing import Iterator
-import fnmatch
-import io, contextlib
 from tempfile import TemporaryDirectory
 from compare_files import (compare_dirs, filter_results, sort_results, print_cmp_info,
                            list_pairs, save_report,)
@@ -28,24 +29,6 @@ _NUMERIC_FIELDS = {'size', 'similarity', 'diff_bytes', 'complete', 'difference',
 _COMPARISON_OPS = {'==', '!=', '>', '>=', '<', '<='}
 _DEFULT_CUTOFF = 0.05
 
-
-def _pair_key(row: dict) -> tuple[str, str]:
-    return row.get('file1'), row.get('file2')
-
-
-def _canonical_row(row: dict) -> dict:
-    data = dict(row)
-    if 'chunks num' in data and 'chunks_num' not in data:
-        data['chunks_num'] = data.pop('chunks num')
-
-    info = data.get('info')
-    if isinstance(info, dict):
-        info = dict(info)
-        if 'chunks num' in info and 'chunks_num' not in info:
-            info['chunks_num'] = info.pop('chunks num')
-        data['info'] = info
-
-    return data
 
 class _ReportBase:
     def __init__(self, rows: list[dict]):
@@ -121,6 +104,10 @@ class _ReportBase:
                 raise ValueError(f'Conflicting data for pair: {key}')
 
         return self
+
+    def unique(self, field: str) -> set:
+        field = self._normalize_column(field)
+        return set(self[field])
 
     def _normalize_column(self, field: str) -> str:
         field = _COLUMN_ALIASES.get(field, field)
@@ -227,6 +214,27 @@ class ReportView(_ReportBase):
 
 def as_report(rows: list[dict]) -> Report:
     return Report(rows)
+
+# ---------------------------------------------------------------------------
+# * Class helpers
+# --------------------------------------------------------------------------
+def _pair_key(row: dict) -> tuple[str, str]:
+    return row.get('file1'), row.get('file2')
+
+
+def _canonical_row(row: dict) -> dict:
+    data = dict(row)
+    if 'chunks num' in data and 'chunks_num' not in data:
+        data['chunks_num'] = data.pop('chunks num')
+
+    info = data.get('info')
+    if isinstance(info, dict):
+        info = dict(info)
+        if 'chunks num' in info and 'chunks_num' not in info:
+            info['chunks_num'] = info.pop('chunks num')
+        data['info'] = info
+
+    return data
 
 
 def test_cr_unit(test_root:Path|str='test_data', tst_msk='*.*'):
