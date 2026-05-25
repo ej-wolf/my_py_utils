@@ -7,6 +7,8 @@ from my_local_utils import collection, print_color, get_unique_name
 
 CHUNK_SIZE = 1024*1024
 MAX_CHUNKS = 100000  # safety cap to avoid memory exhaustion
+DEFAULT_CUTOFF = 0.05
+
 
 def _short_name(p, maxlen=30):
     s = Path(p).name
@@ -20,7 +22,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
     progress = lambda: (offset/max_size)*100
 
     #* Normalize arguments
-    cutoff = kwargs.pop('cutoff', 0.05)
+    cutoff = kwargs.pop('cutoff', DEFAULT_CUTOFF)
     update_cli = kwargs.pop('update_cli', False)
     compare_bytes = kwargs.pop('compare_bytes', True)
     list_chunks = kwargs.pop('list_chunks', True)
@@ -156,7 +158,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
 #*****************************************************************************#
 
-def _compare_pairs(pairs, cutoff=0.05, update_cli=True, **kwargs):
+def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
     """ Compare prepared file pairs and return report rows."""
     sz_dis = kwargs.pop('size_dis', cutoff)
     min_complete = None if cutoff is None else min(1.0, 1.5 * cutoff)
@@ -237,7 +239,7 @@ def _collect_dir_files(paths, mask=None, subdir=False):
     return files
 
 
-def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
+def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
     """ Compare files between one/two dirs or dir collections and return report rows."""
 
     mask:str|None = kwargs.get("mask", None)
@@ -252,7 +254,7 @@ def compare_dirs(d1, d2=None, cutoff=0.05, update_cli=True, **kwargs):
     return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
 
 
-def compare_lists(files1, files2=None, cutoff=0.05, update_cli=True, **kwargs):
+def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
     """ Compare file-path iterables and return the same row format as compare_dirs()."""
 
     def _as_file_list(items):
@@ -280,7 +282,7 @@ def compare_lists(files1, files2=None, cutoff=0.05, update_cli=True, **kwargs):
     pairs = combinations(files1, 2) if files2 is None else product(files1, files2)
     return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
 
-def filter_results(report, cutoff:float|int=0.05, criteria='difference'):
+def filter_results(report, cutoff:float|int=DEFAULT_CUTOFF, criteria='difference'):
     """ General filtering utility for report rows.
         :param numeric cutoff: treated as cutoff for similarity/difference
         :param string cutoff: treated as a filename mask (Pathlib style) file1 or file2
@@ -401,7 +403,7 @@ def list_pairs(report, **kwargs):
 
 def quick_print(report, **kwargs):
     """Filter, sort, and print a compact report in one call."""
-    r = sort_results(filter_results(report, kwargs.get('cutoff',0.05 )), criteria=kwargs.get('criteria','difference'))
+    r = sort_results(filter_results(report, kwargs.get('cutoff',DEFAULT_CUTOFF )), criteria=kwargs.get('criteria','difference'))
     print_cmp_info(r, summary=kwargs.get('summary',True ))
 
 def save_report(report:list, path:Path|str=None, **kwargs):
@@ -462,7 +464,7 @@ def save_report(report:list, path:Path|str=None, **kwargs):
     return target
 
 
-def test_cf_unit( cases, cutoff=0.05, **kwargs):
+def test_cf_unit( cases, cutoff=DEFAULT_CUTOFF, **kwargs):
     """ Run selected bundled directory comparisons in both compare_bytes modes."""
 
     def _files_by_name(path):
