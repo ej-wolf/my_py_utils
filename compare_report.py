@@ -19,8 +19,8 @@ import fnmatch, io, contextlib
 from pathlib import Path
 from typing import Iterator
 from tempfile import TemporaryDirectory
-from compare_files import (compare_dirs, filter_results, sort_results, print_cmp_info,
-                           list_pairs, save_report,)
+from compare_files import (compare_dirs, compare_with_archives, filter_results, sort_results,
+                           print_cmp_info, list_pairs, save_report,)
 
 _VISIBLE_FIELDS = {'file1', 'file2', 'size', 'similarity', 'diff_bytes', 'complete'}
 _COLUMN_ALIASES = {'file_1': 'file1', 'file_2': 'file2'}
@@ -206,6 +206,10 @@ class Report(_ReportBase):
     @classmethod
     def from_dirs(cls, d1, d2=None, cutoff=_DEFULT_CUTOFF, update_cli=True, **kwargs):
         return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, update_cli=update_cli, **kwargs))
+
+    @classmethod
+    def from_archive_compare(cls, files1, files2=None, cutoff=_DEFULT_CUTOFF, update_cli=True, **kwargs):
+        return cls(compare_with_archives(files1, files2=files2, cutoff=cutoff, update_cli=update_cli, **kwargs))
 
 
 class ReportView(_ReportBase):

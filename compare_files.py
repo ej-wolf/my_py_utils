@@ -282,6 +282,19 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, *
     pairs = combinations(files1, 2) if files2 is None else product(files1, files2)
     return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
 
+
+def search_archive(*args, **kwargs):
+    """Lazy wrapper for archive-aware search."""
+    from archive_handling import search_archive as _search_archive
+    return _search_archive(*args, **kwargs)
+
+
+def compare_with_archives(*args, **kwargs):
+    """Lazy wrapper for archive-aware compare."""
+    from archive_handling import compare_with_archives as _compare_with_archives
+    return _compare_with_archives(*args, **kwargs)
+
+
 def filter_results(report, cutoff:float|int=DEFAULT_CUTOFF, criteria='difference'):
     """ General filtering utility for report rows.
         :param numeric cutoff: treated as cutoff for similarity/difference
