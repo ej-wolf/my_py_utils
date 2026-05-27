@@ -26,7 +26,10 @@
 
 12) make Report from_dir accept a list of dirs or a pattern
 
-13) don't throw error if no files found, just print warning
+13) don't throw error if no files/dir found, just print warning
+
+14) if the same path (file or dir)  appears twice in file1 list, ignore the 2nd  one
+
 
 ***********************
 * file_actions.py
