@@ -30,6 +30,7 @@
 
 14) if the same path (file or dir)  appears twice in file1 list, ignore the 2nd  one
 
+15) check if there option to delete a row in report, if not, add it
 
 ***********************
 * file_actions.py
@@ -49,3 +50,40 @@ Traceback (most recent call last):
     return ReportView(self._rows[key])
                       ~~~~~~~~~~^^^^^
 TypeError: 'set' object is not subscriptabl
+
+
+***********************************************
+
+Traceback (most recent call last):
+  File "E:\Xos\Python\Projects\my_py_utils\local_script.py", line 132, in <module>
+    main(src_d, trg_d)
+  File "E:\Xos\Python\Projects\my_py_utils\local_script.py", line 91, in main
+    ok, report = search_archive( zip_path, trg_dir, threshold=threshold,
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Xos\Python\Projects\my_py_utils\archive_handling.py", line 344, in search_archive
+    _extract_archive(archive_path, member_root)
+  File "E:\Xos\Python\Projects\my_py_utils\archive_handling.py", line 102, in _extract_archive
+    raise RuntimeError('; '.join(errors) if errors else f'No backend available for {archive_path}')
+RuntimeError: No backend available for d:\Deleted or lost\H2TEST_92 (L)\CH\y_d\CH\COHF - 2\alyssapark.zip
+
+Process finished with exit code 1
+
+**************************************************
+Traceback (most recent call last):
+  File "C:\Program Files\JetBrains\PyCharm Community Edition 2024.1.4\plugins\python-ce\helpers\pydev\pydevconsole.py", line 364, in runcode
+    coro = func()
+           ^^^^^^
+  File "<input>", line 1, in <module>
+  File "E:\Xos\Python\Projects\my_py_utils\compare_report.py", line 208, in from_dirs
+    return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, update_cli=update_cli, **kwargs))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Xos\Python\Projects\my_py_utils\compare_files.py", line 254, in compare_dirs
+    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Xos\Python\Projects\my_py_utils\compare_files.py", line 179, in _compare_pairs
+    info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Xos\Python\Projects\my_py_utils\compare_files.py", line 62, in compare_files
+    ba = a.read(CHUNK_SIZE)
+         ^^^^^^^^^^^^^^^^^^
+MemoryError
