@@ -43,6 +43,8 @@ from tempfile import TemporaryDirectory
 import fnmatch
 import shutil
 import subprocess
+import tarfile
+import zipfile
 
 from compare_files import DEFAULT_CUTOFF, compare_files, compare_lists
 from my_local_utils import collection
@@ -71,6 +73,22 @@ def _run_command(cmd: list[str], label: str):
         raise RuntimeError(msg)
 
 
+def _zip_sig(path: Path) -> bool:
+    """Return True when the archive is a ZIP readable by Python."""
+    try:
+        return zipfile.is_zipfile(path)
+    except OSError:
+        return False
+
+
+def _tar_sig(path: Path) -> bool:
+    """Return True when the archive is a TAR variant readable by Python."""
+    try:
+        return tarfile.is_tarfile(path)
+    except OSError:
+        return False
+
+
 def _extract_archive(archive_path: Path, out_dir: Path):
     archive_path = Path(archive_path)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +96,22 @@ def _extract_archive(archive_path: Path, out_dir: Path):
     tar_sig = ''.join(archive_path.suffixes[-2:]).lower() if len(archive_path.suffixes) >= 2 else archive_path.suffix.lower()
 
     errors = []
+    if _zip_sig(archive_path):
+        try:
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(out_dir)
+            return
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if _tar_sig(archive_path):
+        try:
+            with tarfile.open(archive_path) as tf:
+                tf.extractall(out_dir)
+            return
+        except Exception as exc:
+            errors.append(str(exc))
+
     if tar_sig in _TAR_EXTS and _TAR:
         try:
             _run_command([_TAR, '-xf', str(archive_path), '-C', str(out_dir)], f'extract {archive_path}')
