@@ -15,10 +15,10 @@
     report.save('report.pcl')   :   Save the wrapped report as pickle.
 """
 
-import fnmatch, io, contextlib
+import fnmatch
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Iterator
-from tempfile import TemporaryDirectory
 from compare_files import (compare_dirs, filter_results, sort_results, print_cmp_info,
                            list_pairs, save_report,)
 
@@ -108,6 +108,31 @@ class _ReportBase:
     def unique(self, field: str) -> set:
         field = self._normalize_column(field)
         return set(self[field])
+
+    def delete(self, index: int):
+        return self.drop(index)
+
+    def drop(self, indexes):
+        if isinstance(indexes, int):
+            indexes = [indexes]
+        elif not isinstance(indexes, Iterable):
+            raise TypeError('drop() expects an int or iterable of ints')
+
+        valid = set()
+        for index in indexes:
+            if not isinstance(index, int):
+                raise TypeError('drop() indexes must be ints')
+
+            resolved = index if index >= 0 else len(self._rows) + index
+            if 0 <= resolved < len(self._rows):
+                valid.add(resolved)
+            else:
+                print(f'[WARN] index {index} out of range: 0-{len(self._rows)} ')
+
+        for index in sorted(valid, reverse=True):
+            del self._rows[index]
+
+        return self
 
     def _normalize_column(self, field: str) -> str:
         field = _COLUMN_ALIASES.get(field, field)
@@ -235,100 +260,3 @@ def _canonical_row(row: dict) -> dict:
         data['info'] = info
 
     return data
-
-
-def test_cr_unit(test_root:Path|str='test_data', tst_msk='*.*'):
-    """Run a small smoke test for the report wrapper on a given directory tree."""
-
-    def _check(name: str, cond: bool, detail=''):
-        checks.append({'check': name, 'ok': bool(cond), 'detail': detail})
-
-    def _capture_output(func, *args, **kwargs):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            func(*args, **kwargs)
-        return buf.getvalue()
-
-    def _match_mask(path_str: str) -> bool:
-        return fnmatch.fnmatch(Path(path_str).name, tst_msk)
-
-    test_root = Path(test_root)
-    with contextlib.redirect_stdout(io.StringIO()):
-        report = Report.from_dirs(test_root, update_cli=False, subdir=True)
-
-    checks = []
-
-    sample_view = report[0:min(5, len(report))]
-    sample_row = report[0] if len(report) > 0 else None
-    mask_view = report.where('file1', tst_msk)
-    exact_view = report.filter(cutoff=0.0, criteria='dif')
-    pairs_demo = exact_view[0:min(4, len(exact_view))]
-
-    _check('column access', len(report['file1']) == len(report))
-    _check('slice returns view', isinstance(sample_view, ReportView))
-    _check('row access returns dict', sample_row is None or isinstance(sample_row, dict))
-    _check('mask where on file1', all(_match_mask(p) for p in mask_view['file1']), f'matches={len(mask_view)}')
-    _check('similarity exact-only', len(report.where('similarity', '>', 0.94)) < len(report.where('sim_max', '>', 0.94)))
-    _check('filter delegates', len(report.filter(cutoff=0.05, criteria='dif')) == len(filter_results(report.rows, cutoff=0.05, criteria='dif')))
-
-    sorted_view = report.sort(criteria='sim_max', order='decrease')
-    similarities = sorted_view['similarity']
-    _check('sort delegates', similarities == sorted(similarities, reverse=True))
-
-    table_out = _capture_output(report.print, summary=False)
-    _check('print output', bool(table_out.strip()))
-
-    pairs_out = _capture_output(pairs_demo.list_pairs, cutoff=0.0, criteria='dif')
-    _check('list_pairs output', bool(pairs_out.strip()))
-
-    with TemporaryDirectory() as td:
-        target = report.save(Path(td))
-        _check('save report', target.is_file(), str(target))
-
-    row_a = {'file1': 'a', 'file2': 'b', 'size': 1, 'similarity': 1.0, 'diff_bytes': 0, 'complete': 1.0}
-    row_b = {'file1': 'c', 'file2': 'd', 'size': 2, 'similarity': 0.9, 'diff_bytes': 1, 'complete': 1.0}
-    merged = Report([dict(row_a)]).append(Report([dict(row_a), dict(row_b)]))
-    _check('append dedup merge', len(merged) == 2)
-
-    plus_merged = Report([dict(row_a)]) + Report([dict(row_a), dict(row_b)])
-    _check('plus matches append', len(plus_merged) == 2 and plus_merged['file1'] == merged['file1'])
-
-    conflict_ok = False
-    try:
-        Report([dict(row_a)]).append([dict(row_a), {**row_a, 'similarity': 0.5}])
-    except ValueError:
-        conflict_ok = True
-    _check('append conflict guard', conflict_ok)
-
-    passed = sum(item['ok'] for item in checks)
-
-    print('Visual demo')
-    print(f"slice returns view: {sample_view!r}")
-    print('slice file1 sample:')
-    for item in sample_view['file1'][:3]:
-        print(f'  {item}')
-    print('row access sample:')
-    print(sample_row)
-    print(f"mask where sample: report.where('file1', {tst_msk!r})['file2'][:3]")
-    if len(mask_view) == 0:
-        print('  <no matches>')
-    else:
-        for item in mask_view['file2'][:3]:
-            print(f'  {item}')
-    print('list_pairs sample:')
-    print(pairs_out.strip() if pairs_out.strip() else '  <no exact pairs>')
-    print('-' * 72)
-
-    print(f"{'check':28} {'result':8} detail")
-    for item in checks:
-        print(f"{item['check'][:28]:28} {('PASS' if item['ok'] else 'FAIL'):8} {item['detail']}")
-
-    print('-' * 72)
-    print(f"passed: {passed}/{len(checks)}")
-
-    return {'passed': passed, 'total': len(checks), 'checks': checks}
-
-if __name__ == '__main__':
-    pass
-    test_root = Path("test_data")
-    test_cr_unit(test_root,'NV*')

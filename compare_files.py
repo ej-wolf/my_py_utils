@@ -1,6 +1,7 @@
-import time, fnmatch, io, contextlib, pickle
+import time, fnmatch, pickle
 from pathlib import Path
 from itertools import combinations, product
+from collections.abc import Iterable
 
 #* Imports from py_utils project
 from my_local_utils import collection, print_color, get_unique_name
@@ -9,6 +10,7 @@ CHUNK_SIZE = 1024*1024
 MAX_CHUNKS = 100000  # safety cap to avoid memory exhaustion
 DEFAULT_CUTOFF = 0.05
 
+BAR_W = 40 # 36
 
 def _short_name(p, maxlen=30):
     s = Path(p).name
@@ -16,6 +18,42 @@ def _short_name(p, maxlen=30):
 
 def _empty_info(list_chunks=True):
     return {'similarity':0.0, 'complete':0.0, 'diff_bytes':0, 'chunks_num':0, 'size':0, 'note':''}
+
+
+def _normalize_error_handling(mode: str) -> str:
+    if mode not in {'auto', 'manual'}:
+        raise ValueError("error_handling must be 'auto' or 'manual'")
+    return mode
+
+
+def _dedupe_paths(paths) -> list[Path]:
+    unique = []
+    seen = set()
+    for item in paths:
+        path = Path(item)
+        key = path.resolve(strict=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _print_progress(label: str, current: int, total: int, last_pct: int = -1) -> int:
+    if total <= 0:
+        return last_pct
+
+    pct = int((100 * current) / total)
+    if pct == last_pct and current < total:
+        return last_pct
+
+    filled = int((BAR_W * current) / total)
+    bar = '#' * filled + '.' * (BAR_W - filled)
+    line = f'{label:<18} [{bar}] {pct:3d}% ({current}/{total})'
+    print(f'\r{line}', end='', flush=True)
+    if current >= total:
+        print(f'\r{" " * len(line)}\r', end='', flush=True)
+    return pct
 
 def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
     """ Compare two files and return similarity, coverage, diff size, and chunk info."""
@@ -160,23 +198,56 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
 def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
     """ Compare prepared file pairs and return report rows."""
+    def _warn_pair_failure(stage: str, f1: Path, f2: Path, exc: OSError) -> bool:
+        message = '\n'.join((
+            'Warning: compare skipped for',
+            f'  file1: {f1}',
+            f'  file2: {f2}',
+            f'  stage: {stage}',
+            f'  reason: {exc}',
+        ))
+        print_color(message, 'y')
+        if error_handling == 'auto':
+            return False
+
+        answer = input('Abort comparison? [y/N]: ').strip().lower()
+        return answer in {'y', 'yes'}
+
     sz_dis = kwargs.pop('size_dis', cutoff)
+    error_handling = _normalize_error_handling(kwargs.pop('error_handling', 'auto'))
+    progress_bar = bool(kwargs.pop('progress_bar', False))
+    total_pairs = int(kwargs.pop('total_pairs', 0) or 0)
+    show_pair_bar = progress_bar and not update_cli
     min_complete = None if cutoff is None else min(1.0, 1.5 * cutoff)
     report = []
+    last_pct = -1
 
-    for f1, f2 in pairs:
-        size1 = f1.stat().st_size
-        size2 = f2.stat().st_size
-        max_size = max(size1, size2)
-        size_diff = abs(size1 - size2)
+    for idx, (f1, f2) in enumerate(pairs, 1):
+        try:
+            size1 = f1.stat().st_size
+            size2 = f2.stat().st_size
+            max_size = max(size1, size2)
+            size_diff = abs(size1 - size2)
+        except OSError as exc:
+            if _warn_pair_failure('stat', f1, f2, exc):
+                raise RuntimeError(f'Comparison aborted for pair: {f1} vs {f2}') from exc
+            continue
 
-        info = None
-        if sz_dis is not None and size_diff > max_size*sz_dis:
-            info = _empty_info()
-            info['note'] = 'skipped due to size difference'
-        else:
-            print(f"{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:")
-            info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli, **kwargs)
+        try:
+            info = None
+            if sz_dis is not None and size_diff > max_size*sz_dis:
+                info = _empty_info()
+                info['note'] = 'skipped due to size difference'
+            else:
+                if not show_pair_bar:
+                    print(f'{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:')
+                info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli, **kwargs)
+        except OSError as exc:
+            if _warn_pair_failure('compare', f1, f2, exc):
+                raise RuntimeError(f'Comparison aborted for pair: {f1} vs {f2}') from exc
+            if show_pair_bar:
+                last_pct = _print_progress('comparing pairs', idx, total_pairs, last_pct)
+            continue
 
         row = {'file1': str(f1), 'file2': str(f2),
                'size': info['size'],
@@ -188,11 +259,13 @@ def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
         # Drop rows that diverged almost immediately relative to the active cutoff.
         if min_complete is None or row['complete'] >= min_complete:
             report.append(row)
+        if show_pair_bar:
+            last_pct = _print_progress('comparing pairs', idx, total_pairs, last_pct)
 
     return report
 
 
-def _collect_dir_files(paths, mask=None, subdir=False):
+def _collect_dir_files(paths, mask=None, subdir=False, dedupe=False):
     """Collect files from one directory, dir collection, or dir mask."""
 
     def _expand_dir_item(item) -> list[Path] | None:
@@ -201,7 +274,7 @@ def _collect_dir_files(paths, mask=None, subdir=False):
         if not has_wildcard:
             p = Path(item)
             if not p.is_dir():
-                print(f'Error: {p} is not a valid path.')
+                print_color(f'Warning: {p} is not a valid path.', 'y')
                 return None
             return [p]
 
@@ -215,7 +288,7 @@ def _collect_dir_files(paths, mask=None, subdir=False):
 
         matches = [p for p in root.glob(rel_pattern) if p.is_dir()]
         if not matches:
-            print(f'Error: no directories match pattern {item!r}.')
+            print_color(f'Warning: no directories match pattern {item!r}.', 'y')
             return None
         return matches
 
@@ -225,6 +298,8 @@ def _collect_dir_files(paths, mask=None, subdir=False):
         if expanded is None:
             return None
         dirs.extend(expanded)
+    if dedupe:
+        dirs = _dedupe_paths(dirs)
 
     files = []
     for d in dirs:
@@ -236,7 +311,7 @@ def _collect_dir_files(paths, mask=None, subdir=False):
             files.extend(f for f in d.rglob('*') if f.is_file())
         else:
             files.extend(f for f in d.iterdir() if f.is_file())
-    return files
+    return _dedupe_paths(files) if dedupe else files
 
 
 def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
@@ -244,14 +319,16 @@ def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
 
     mask:str|None = kwargs.get("mask", None)
     subdir:bool = kwargs.get("subdir", False)
+    _normalize_error_handling(kwargs.get('error_handling', 'auto'))
 
-    files1 = _collect_dir_files(d1, mask=mask, subdir=subdir)
+    files1 = _collect_dir_files(d1, mask=mask, subdir=subdir, dedupe=True)
     files2 = _collect_dir_files(d2, mask=mask, subdir=subdir) if d2 else None
     if files1 is None or (d2 and files2 is None):
         return []
 
+    total_pairs = len(files1) * (len(files1) - 1) // 2 if d2 is None else len(files1) * len(files2)
     pairs = combinations(files1, 2) if d2 is None else product(files1, files2)
-    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
+    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, total_pairs=total_pairs, **kwargs)
 
 
 def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
@@ -262,7 +339,7 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, *
         for item in collection(items):
             p = Path(item)
             if not p.is_file():
-                print(f'Error: {p} is not a valid file path.')
+                print_color(f'Warning: {p} is not a valid file path.', 'y')
                 return None
             paths.append(p)
         return paths
@@ -270,8 +347,10 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, *
     files1 = _as_file_list(files1)
     has_second = files2 is not None
     files2 = _as_file_list(files2) if has_second else None
+    _normalize_error_handling(kwargs.get('error_handling', 'auto'))
     if files1 is None or (has_second and files2 is None):
         return []
+    files1 = _dedupe_paths(files1)
 
     mask:str|None = kwargs.get('mask', None)
 
@@ -279,8 +358,9 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, *
         files1 = [f for f in files1 if fnmatch.fnmatch(f.name, mask)]
         files2 = [f for f in files2 if fnmatch.fnmatch(f.name, mask)] if files2 else None
 
+    total_pairs = len(files1) * (len(files1) - 1) // 2 if files2 is None else len(files1) * len(files2)
     pairs = combinations(files1, 2) if files2 is None else product(files1, files2)
-    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, **kwargs)
+    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, total_pairs=total_pairs, **kwargs)
 
 def filter_results(report, cutoff:float|int=DEFAULT_CUTOFF, criteria='difference'):
     """ General filtering utility for report rows.
@@ -462,81 +542,3 @@ def save_report(report:list, path:Path|str=None, **kwargs):
         pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     return target
-
-
-def test_cf_unit( cases, cutoff=DEFAULT_CUTOFF, **kwargs):
-    """ Run selected bundled directory comparisons in both compare_bytes modes."""
-
-    def _files_by_name(path):
-        return {p.name: p for p in path.iterdir() if p.is_file()}
-
-    rows = []
-    for label, left_dir, right_dir in cases:
-        left_files = _files_by_name(left_dir)
-        right_files = _files_by_name(right_dir)
-
-        common_names = sorted(set(left_files) & set(right_files))
-        left_only  = sorted(set(left_files) - set(right_files))
-        right_only = sorted(set(right_files) - set(left_files))
-
-        for cmp_b in (True, False):
-            start = time.perf_counter()
-            similarities = []
-            diff_bytes = 0
-            identical = 0
-
-            for name in common_names:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    info = compare_files(left_files[name], right_files[name],
-                                        cutoff=cutoff,
-                                         update_cli= kwargs.get('cli_update',False),
-                                         compare_bytes=cmp_b,)
-
-                similarities.append(info['similarity'])
-                diff_bytes += info['diff_bytes']
-                if info['diff_bytes'] == 0:
-                    identical += 1
-
-            elapsed = time.perf_counter() - start
-            avg_similarity = sum(similarities)/len(similarities) if similarities else 0.0
-            min_similarity = min(similarities) if similarities else 0.0
-
-            rows.append({'case': label,
-                        'compare_bytes': cmp_b,
-                        'files': len(common_names),
-                        'identical': identical,
-                        'avg_similarity': avg_similarity,
-                        'min_similarity': min_similarity,
-                        'diff_bytes': diff_bytes,
-                        'elapsed_sec': elapsed,
-                        'left_only': len(left_only),
-                        'right_only': len(right_only),} )
-
-    print(f"{'case':28} {'byte mode':10} {'files':>5} {'ident':>5} "
-          f"{'avg_sim':>10} {'min_sim':>10} {'diff_bytes':>12} {'sec':>8}")
-
-    for row in rows:
-        print(f"{row['case'][:28]:28} "
-              f"{str('on' if  row['compare_bytes'] else 'off'):^10} "
-              f"{row['files']:^5d} "
-              f"{row['identical']:5d} "
-              f"{row['avg_similarity']:10.5f} "
-              f"{row['min_similarity']:10.5f} "
-              f"{row['diff_bytes']:12,d} "
-              f"{row['elapsed_sec']:8.3f}" )
-
-        if row['left_only'] or row['right_only']:
-            print(f"  unmatched files: left_only={row['left_only']} right_only={row['right_only']}")
-
-    return rows
-
-# 444(14,14,1) -> 412(4,2,1) -> 502
-
-if __name__ == '__main__':
-
-    test_root =  Path("test_data")
-    tst_cases = (['try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'],
-                 ['try_03 vs try_04', test_root/'try_03',    test_root/'try_04'],
-                 ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
-                 ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],)
-    test_cf_unit(cases=tst_cases[0:2], cli_update=True)
