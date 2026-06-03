@@ -18,7 +18,7 @@ import builtins
 import os
 import shutil
 
-from my_local_utils import get_unique_name
+from my_local_utils import _absolute_path, get_unique_name, relative_paths
 
 
 def _path_exists(path: Path) -> bool:
@@ -59,10 +59,6 @@ def _normalize_delete_policy(policy: str) -> str:
     if policy not in {'trash_bin', 'prune', 'ask'}:
         raise ValueError("policy must be 'trash_bin', 'prune', or 'ask'")
     return policy
-
-
-def _absolute_path(path: Path) -> Path:
-    return path if path.is_absolute() else Path.cwd() / path
 
 
 def _common_parent(paths: list[Path]) -> Path | None:

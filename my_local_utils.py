@@ -1,6 +1,7 @@
-import shutil, re, random
+import shutil, re, zipfile, fnmatch, os
 from pathlib import Path
 import json
+import random
 
 
 from colorama import Fore, Style
@@ -15,9 +16,8 @@ def print_color(msg:str, clr=Fore.RED):
     elif clr in ['GREEN', 'Green', 'green', 'g']:  clr = Fore.GREEN
     print( f"{clr}{msg}{Style.RESET_ALL}")
 
-# ----------------------------------------------------------------------------
-# Files and Paths Utils
-# -----------------------------------------------------------------------------
+#* region  Files and Paths Utils ----------------------------------------------
+
 
 def _make_unique_dir(root, base_name, **kwargs):
     """  Create a unique subdir under root for base_name, adding (2), (3), ... if needed.
@@ -145,6 +145,168 @@ def get_unique_name(file_name:str|Path, n:int=3) -> Path:
             return new_path
         counter += 1
 
+
+def _absolute_path(path: Path) -> Path:
+    return path if path.is_absolute() else Path.cwd()/path
+
+
+def relative_paths(paths, ref_path=None) -> list[Path]:
+    """ Return input paths as paths relative to ref_path or the current working directory."""
+    root = Path.cwd() if ref_path is None else Path(ref_path)
+    root_abs = _absolute_path(root)
+    return [ Path(os.path.relpath(_absolute_path(Path(path)), root_abs))
+             for path in collection(paths) ]
+
+#endregion
+
+#* region *** Compressing Utils  *********************************************#
+
+def zip_dir(target_dir:Path|str, method='file', protocol='zip', rm_policy='ask', mask=None):
+    """ Compress a directory either child-by-child or as one archive.
+    method:     'file'  -> zip each direct child of `dir` separately
+                'dir'   -> zip the whole directory into one archive
+    protocol:   'zip' implemented now,  ('7z' / 'rar' reserved for later)
+    rm_policy:  'keep'  -> keep originals
+                'remove'-> remove originals after successful compression
+                'ask'   -> ask once at the end whether to remove originals
+    """
+    def _matches_mask(path_obj):
+        if mask in [None, '']:
+            return True
+        rel_name = str(path_obj.relative_to(target_dir)) if path_obj != target_dir else path_obj.name
+        return fnmatch.fnmatch(path_obj.name, mask) or fnmatch.fnmatch(rel_name, mask)
+
+    target_dir = Path(target_dir)
+    if not target_dir.is_dir():
+        raise NotADirectoryError(target_dir)
+    if method not in {'file', 'dir'}:
+        raise ValueError(f"Unknown zip_dir method: {method}")
+    archived, originals = [], []
+    if method == 'file':
+        for child in sorted(target_dir.iterdir()):
+            if not _matches_mask(child):
+                continue
+            archive_path = _zip_one_path(child, protocol=protocol)
+            archived.append(archive_path)
+            originals.append(child)
+    else:
+        members = [child for child in sorted(target_dir.rglob('*')) if child.is_file() and _matches_mask(child)]
+        archive_path = _zip_one_path(target_dir, protocol=protocol, members=members)
+        archived.append(archive_path)
+        originals.append(target_dir)
+
+    if _archive_rm_decision(rm_policy, len(originals), "Remove original sources after archiving"):
+        for src in originals:
+            if src.is_dir():
+                shutil.rmtree(src)
+            elif src.exists():
+                src.unlink()
+
+    return archived
+
+
+def unzip_dir(z: Path | str, rm_policy='ask'):
+    """ Extract per-file ZIPs from a directory, or unpack a directory ZIP and then extract nested JSON ZIPs.
+    If `z` is a directory:   extract every direct `*.zip` child into that directory.
+    If `z` is a `.zip` file: unpack it first, then extract nested `*.zip` files so the final outputs are plain files like `foo.json`.
+    """
+    z = Path(z)
+    extracted = []
+    archives_to_remove = []
+
+    if z.is_file():
+        if z.suffix.lower() != '.zip':
+            raise ValueError(f"Expected a directory or .zip file, got: {z}")
+        direct_files = [Path(name) for name in zipfile.ZipFile(z, 'r').namelist() if not name.endswith('/')]
+        root_parts = {name.parts[0] for name in direct_files if name.parts}
+        if len(root_parts) == 1 and next(iter(root_parts)) == z.stem:
+            root_dir = z.parent / z.stem
+            _extract_zip_file(z, out_dir=z.parent)
+        else:
+            root_dir = z.parent / z.stem
+            _extract_zip_file(z, out_dir=root_dir)
+        archives_to_remove.append(z)
+    elif z.is_dir():
+        root_dir = z
+    else:
+        raise FileNotFoundError(z)
+
+    nested_archives = sorted(root_dir.rglob('*.zip'))
+    for archive in nested_archives:
+        extracted.extend(_extract_zip_file(archive, out_dir=archive.parent))
+        archives_to_remove.append(archive)
+
+    if _archive_rm_decision(rm_policy, len(archives_to_remove), "Remove ZIP archives after extracting"):
+        for archive in archives_to_remove:
+            if archive.exists():
+                archive.unlink()
+
+    return extracted
+
+#* compressing helpers
+def _zip_one_path(path: str | Path, protocol='zip', members=None):
+    """ Archive one file or directory and return the created archive path."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    archive_path = path.with_suffix('.zip') if path.is_file() else path.parent / f"{path.name}.zip"
+    if archive_path.exists():
+        archive_path = get_unique_name(archive_path)
+    if protocol != 'zip':
+        # TODO: add 7z / rar support once dependency policy is settled.
+        raise NotImplementedError(f"archive protocol '{protocol}' is not implemented yet")
+
+    with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        if path.is_file():
+            zf.write(path, arcname=path.name)
+        else:
+            children = members if members is not None else sorted(path.rglob('*'))
+            for child in children:
+                child = Path(child)
+                if child.is_file():
+                    zf.write(child, arcname=str(child.relative_to(path.parent)))
+    return archive_path
+
+
+def _archive_rm_decision(rm_policy, n_items, action):
+    """ Resolve whether archived/source items should be removed."""
+    if rm_policy not in {'keep', 'remove', 'ask'}:
+        raise ValueError(f"Unknown rm_policy: {rm_policy}")
+    if rm_policy == 'remove':
+        return True
+    if rm_policy == 'keep':
+        return False
+    try:
+        ans = input(f"{action} {n_items} item(s)? [Y/N]: ").strip().lower()
+    except EOFError:
+        ans = ''
+    return ans in {'y','Y', 'Yes', 'yes'}
+
+
+def _extract_zip_file(zip_path: str | Path, out_dir: str | Path | None = None):
+    """ Extract one ZIP archive and return the created file paths."""
+
+    zip_path = Path(zip_path)
+    if zip_path.suffix.lower() != '.zip':
+        raise ValueError(f"Not a ZIP file: {zip_path}")
+
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        names = [Path(name) for name in zf.namelist() if not name.endswith('/')]
+        root_parts = {name.parts[0] for name in names if name.parts}
+
+        if out_dir is None:
+            if len(root_parts) == 1 and next(iter(root_parts)) == zip_path.stem:
+                out_dir = zip_path.parent
+            else:
+                out_dir = zip_path.parent
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        zf.extractall(out_dir)
+
+    return [out_dir / name for name in names]
+
+#endregion
 
 # ***** json handling ***** #x`1
 def load_json_frames(json_path: str | Path):
