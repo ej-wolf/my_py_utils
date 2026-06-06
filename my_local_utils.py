@@ -4,6 +4,8 @@ import json
 import random
 
 
+
+
 from colorama import Fore, Style
 # B, U, R = '\033[1m', '\033[4m', '\033[0m'
 # RED, GREEN, BLUE = Fore.RED, Fore.GREEN, Fore.BLUE
@@ -305,6 +307,84 @@ def _extract_zip_file(zip_path: str | Path, out_dir: str | Path | None = None):
         zf.extractall(out_dir)
 
     return [out_dir / name for name in names]
+
+
+# --- unzip_all_to with separate_dir option ---
+def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs):
+
+    zip_path, extract_to = Path(zip_path), Path(extract_to)
+
+    search_tree = kwargs.get("search_tree", True)
+    tree_struct = kwargs.get("tree_struct", "full")
+    conflict_policy = kwargs.get("conflict_policy", "auto")
+    separate_dir = kwargs.get("separate_dir", True)
+
+    if not zip_path.exists():
+        raise FileNotFoundError(zip_path)
+
+    extract_to.mkdir(parents=True, exist_ok=True)
+
+    # collect zip files
+    if zip_path.is_file():
+        zip_files = [zip_path]
+        base_root = zip_path.parent
+    else:
+        if search_tree:
+            zip_files = list(zip_path.rglob("*.zip"))
+        else:
+            zip_files = list(zip_path.glob("*.zip"))
+        base_root = zip_path
+
+    extracted = []
+
+    for zf in zip_files:
+
+        with zipfile.ZipFile(zf, "r") as z:
+
+            # base output dir (optionally per-archive)
+            base_out = (extract_to / zf.stem) if separate_dir else extract_to
+
+            for member in z.infolist():
+
+                if member.is_dir():
+                    continue
+
+                member_path = Path(member.filename)
+
+                # --- target path resolution ---
+                if tree_struct == "full":
+                    target = base_out / member_path
+
+                elif tree_struct == "partial":
+                    rel = zf.parent.relative_to(base_root)
+                    target = base_out / rel / member_path.name
+
+                elif tree_struct == "no":
+                    target = base_out / member_path.name
+
+                else:
+                    raise ValueError(f"Invalid tree_struct: {tree_struct}")
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+
+                # --- conflict handling ---
+                if target.exists():
+                    if conflict_policy == "auto":
+                        target = get_unique_name(target)
+                    elif conflict_policy == "rewrite":
+                        pass
+                    else:
+                        raise ValueError(f"Invalid conflict_policy: {conflict_policy}")
+
+                # --- extraction ---
+                with z.open(member) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+                extracted.append(target)
+
+    return extracted
+
+
 
 #endregion
 
