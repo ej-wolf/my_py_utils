@@ -39,7 +39,8 @@ def _dedupe_paths(paths) -> list[Path]:
     return unique
 
 
-def _print_progress(label: str, current: int, total: int, last_pct: int = -1) -> int:
+def _print_progress(label: str, current: int, total : int, last_pct: int = -1) -> int:
+    # print(last_pct)
     if total <= 0:
         return last_pct
 
@@ -196,8 +197,9 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
 #*****************************************************************************#
 
-def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
+def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=False, **kwargs):
     """ Compare prepared file pairs and return report rows."""
+    print(kwargs)
     def _warn_pair_failure(stage: str, f1: Path, f2: Path, exc: OSError) -> bool:
         message = '\n'.join((
             'Warning: compare skipped for',
@@ -215,9 +217,10 @@ def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
 
     sz_dis = kwargs.pop('size_dis', cutoff)
     error_handling = _normalize_error_handling(kwargs.pop('error_handling', 'auto'))
-    progress_bar = bool(kwargs.pop('progress_bar', False))
     total_pairs = int(kwargs.pop('total_pairs', 0) or 0)
-    show_pair_bar = progress_bar and not update_cli
+    # progress_bar = bool(kwargs.pop('progress_bar', False))
+    # show_pair_bar = progress_bar and not update_cli
+    show_pair_bar = kwargs.pop('progress_bar', False) and not update_cli
     min_complete = None if cutoff is None else min(1.0, 1.5 * cutoff)
     report = []
     last_pct = -1
@@ -316,7 +319,7 @@ def _collect_dir_files(paths, mask=None, subdir=False, dedupe=False):
 
 def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
     """ Compare files between one/two dirs or dir collections and return report rows."""
-
+    # print("cmp-dir", kwargs)
     mask:str|None = kwargs.get("mask", None)
     subdir:bool = kwargs.get("subdir", False)
     _normalize_error_handling(kwargs.get('error_handling', 'auto'))
@@ -333,7 +336,7 @@ def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
 
 def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
     """ Compare file-path iterables and return the same row format as compare_dirs()."""
-
+    print("cmp-ls", kwargs)
     def _as_file_list(items):
         paths = []
         for item in collection(items):
