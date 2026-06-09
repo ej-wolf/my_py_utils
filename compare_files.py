@@ -26,6 +26,12 @@ def _normalize_error_handling(mode: str) -> str:
     return mode
 
 
+def _normalize_output_mode(mode: str) -> str:
+    if mode not in {'quiet', 'progress', 'cli', 'both'}:
+        raise ValueError("output_mode must be 'quiet', 'progress', 'cli', or 'both'")
+    return mode
+
+
 def _dedupe_paths(paths) -> list[Path]:
     unique = []
     seen = set()
@@ -56,15 +62,70 @@ def _print_progress(label: str, current: int, total : int, last_pct: int = -1) -
         print(f'\r{" " * len(line)}\r', end='', flush=True)
     return pct
 
-def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
+
+def _resolve_top_level_output_mode(compare_name: str, output_mode: str, update_cli, progress_bar) -> str:
+    output_mode = _normalize_output_mode(output_mode)
+    if update_cli is not None or progress_bar is not None:
+        print_color(
+            f"Warning: {compare_name}() ignores legacy 'update_cli'/'progress_bar'; "
+            f"use output_mode={output_mode!r}.",
+            'y',
+        )
+    return output_mode
+
+
+def _render_dual_progress(done_pairs: int, total_pairs: int, pair_label: str, pair_pct: float, state: dict):
+    total_pct = int((100 * done_pairs) / total_pairs) if total_pairs > 0 else 0
+    filled = int((BAR_W * done_pairs) / total_pairs) if total_pairs > 0 else 0
+    bar = '#' * filled + '.' * (BAR_W - filled)
+    line1 = f"Total progress    [{bar}] {total_pct:3d}% ({done_pairs}/{total_pairs})"
+    line2 = f"comparing:  {pair_label[:46]:<46} : {pair_pct:6.2f}%"
+
+    if state.get('drawn'):
+        print('\x1b[2F', end='')
+    print(f'\r\x1b[2K{line1}')
+    print(f'\r\x1b[2K{line2}', end='', flush=True)
+    state['drawn'] = True
+    state['width'] = max(len(line1), len(line2), state.get('width', 0))
+
+
+def _clear_dual_progress(state: dict):
+    if not state.get('drawn'):
+        return
+    width = state.get('width', 0)
+    print('\x1b[2F', end='')
+    print(f'\r\x1b[2K{" " * width}')
+    print(f'\r\x1b[2K{" " * width}', end='\r', flush=True)
+    state.clear()
+
+
+def compare_files(f1:str|Path, f2:str|Path, output_mode='quiet', **kwargs)-> dict: # 151
     """ Compare two files and return similarity, coverage, diff size, and chunk info."""
     progress = lambda: (offset/max_size)*100
 
+    def emit_progress(pct: float):
+        nonlocal last_progress_pct, last_print
+        pct = round(float(pct), 2)
+        if pct == last_progress_pct:
+            return
+        last_progress_pct = pct
+        if progress_cb:
+            progress_cb(pct)
+        elif output_mode in {'cli', 'both'}:
+            now = time.time()
+            if now - last_print >= 5 or pct >= 100.0:
+                print(f"\rProgress: {pct:6.2f}%", end="", flush=True)
+                last_print = now
+
     #* Normalize arguments
     cutoff = kwargs.pop('cutoff', DEFAULT_CUTOFF)
-    update_cli = kwargs.pop('update_cli', False)
+    output_mode = _normalize_output_mode(output_mode)
+    progress_cb = kwargs.pop('progress_cb', None)
+    update_cli = kwargs.pop('update_cli', None)
     compare_bytes = kwargs.pop('compare_bytes', True)
     list_chunks = kwargs.pop('list_chunks', True)
+    if update_cli is not None:
+        output_mode = 'cli' if update_cli else 'quiet'
 
     f1, f2 = Path(f1), Path(f2)
 
@@ -90,6 +151,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
     diff_bytes = 0
     searched_bytes = 0
     last_print = time.time()
+    last_progress_pct = None
     stopped_threshold = False
     chunk_count = 0
     chunks = [] if list_chunks else None
@@ -108,6 +170,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
             if ba == bb:
                 offset += max_len
                 searched_bytes = offset
+                emit_progress(progress())
                 continue
 
             #* in block mode, any differing chunk is counted as fully different
@@ -124,6 +187,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
                     break
 
                 offset += max_len
+                emit_progress(progress())
                 continue
 
             #* BYTE-BY-BYTE COMPARISON - if chunks differ, compare byte by byte
@@ -154,11 +218,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
             offset += max_len
 
-            if update_cli:
-                now = time.time()
-                if now - last_print >= 5:
-                    print(f"\rProgress: {progress():6.2f}%", end="", flush=True)
-                    last_print = now
+            emit_progress(progress())
 
         if chunk_start is not None:
             chunk_count += 1
@@ -186,10 +246,12 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
             'chunks':chunk_list,
             'size': max_size,
             'note': None,}
-    if update_cli and not stopped_threshold:
+    if progress_cb:
+        emit_progress(100 * complete)
+    elif output_mode in {'cli', 'both'} and not stopped_threshold:
         #* overwrite the progress line with the final result
         print(f"\rSimilarity: {similarity: 0.5f}\n", end='', flush=True)
-    elif stopped_threshold:
+    elif stopped_threshold and output_mode in {'cli', 'both'}:
         print(f"\rProgress: {100 * complete:6.2f}% -Skipped!\n")
         info['note'] = f"stopped by cutoff at byte {searched_bytes} ({complete:.3%})\n"
 
@@ -197,9 +259,8 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs)-> dict: # 151
 
 #*****************************************************************************#
 
-def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=False, **kwargs):
+def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, output_mode='quiet', **kwargs):
     """ Compare prepared file pairs and return report rows."""
-    print(kwargs)
     def _warn_pair_failure(stage: str, f1: Path, f2: Path, exc: OSError) -> bool:
         message = '\n'.join((
             'Warning: compare skipped for',
@@ -218,12 +279,14 @@ def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=False, **kwargs):
     sz_dis = kwargs.pop('size_dis', cutoff)
     error_handling = _normalize_error_handling(kwargs.pop('error_handling', 'auto'))
     total_pairs = int(kwargs.pop('total_pairs', 0) or 0)
-    # progress_bar = bool(kwargs.pop('progress_bar', False))
-    # show_pair_bar = progress_bar and not update_cli
-    show_pair_bar = kwargs.pop('progress_bar', False) and not update_cli
+    output_mode = _normalize_output_mode(output_mode)
+    show_pair_bar = output_mode == 'progress'
+    show_cli = output_mode == 'cli'
+    show_both = output_mode == 'both'
     min_complete = None if cutoff is None else min(1.0, 1.5 * cutoff)
     report = []
     last_pct = -1
+    dual_state = {}
 
     for idx, (f1, f2) in enumerate(pairs, 1):
         try:
@@ -242,14 +305,25 @@ def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=False, **kwargs):
                 info = _empty_info()
                 info['note'] = 'skipped due to size difference'
             else:
-                if not show_pair_bar:
-                    print(f'{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:')
-                info = compare_files(f1, f2, cutoff=cutoff, update_cli=update_cli, **kwargs)
+                if show_both:
+                    pair_label = f'{_short_name(f1)}   vs.  {_short_name(f2)} ->'
+                    _render_dual_progress(idx - 1, total_pairs, pair_label, 0.0, dual_state)
+                    info = compare_files(f1, f2, cutoff=cutoff, output_mode='quiet',
+                                         progress_cb=lambda pct, i=idx, label=pair_label: _render_dual_progress(i - 1, total_pairs, label, pct, dual_state),
+                                         **kwargs,)
+                    _render_dual_progress(idx, total_pairs, pair_label, 100.0 * info['complete'], dual_state)
+                else:
+                    if show_cli:
+                        print(f'{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:')
+                    info = compare_files(f1, f2, cutoff=cutoff, output_mode='cli' if show_cli else 'quiet', **kwargs)
         except OSError as exc:
             if _warn_pair_failure('compare', f1, f2, exc):
+                _clear_dual_progress(dual_state)
                 raise RuntimeError(f'Comparison aborted for pair: {f1} vs {f2}') from exc
             if show_pair_bar:
-                last_pct = _print_progress('comparing pairs', idx, total_pairs, last_pct)
+                last_pct = _print_progress('Total progress', idx, total_pairs, last_pct)
+            elif show_both:
+                _render_dual_progress(idx, total_pairs, f'{_short_name(f1)}   vs.  {_short_name(f2)} ->', 0.0, dual_state)
             continue
 
         row = {'file1': str(f1), 'file2': str(f2),
@@ -263,80 +337,133 @@ def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, update_cli=False, **kwargs):
         if min_complete is None or row['complete'] >= min_complete:
             report.append(row)
         if show_pair_bar:
-            last_pct = _print_progress('comparing pairs', idx, total_pairs, last_pct)
+            last_pct = _print_progress('Total progress', idx, total_pairs, last_pct)
+    if show_both:
+        _clear_dual_progress(dual_state)
 
     return report
 
 
-def _collect_dir_files(paths, mask=None, subdir=False, dedupe=False):
-    """Collect files from one directory, dir collection, or dir mask."""
+def _normalize_file_types(file_type) -> set[str] | None:
+    if file_type in (None, 'all'):
+        return None
 
-    def _expand_dir_item(item) -> list[Path] | None:
+    normalized = set()
+    for item in collection(file_type):
+        text = str(item).strip()
+        if not text:
+            continue
+        if text.lower() == 'all':
+            return None
+        normalized.add(text.lower() if text.startswith('.') else f'.{text.lower()}')
+    return normalized
+
+
+def _match_file_type(path: Path, allowed_types: set[str] | None) -> bool:
+    return allowed_types is None or path.suffix.lower() in allowed_types
+
+
+def _glob_parts(item) -> tuple[Path, str]:
+    pattern = Path(item)
+    if pattern.is_absolute():
+        return Path(pattern.anchor), Path(*pattern.parts[1:]).as_posix()
+    return Path.cwd(), pattern.as_posix()
+
+
+def _filter_selected_files(files, *, mask=None, allowed_types=None) -> list[Path]:
+    selected = [Path(f) for f in files if Path(f).is_file()]
+    if mask:
+        selected = [f for f in selected if fnmatch.fnmatch(f.name, mask)]
+    if allowed_types is not None:
+        selected = [f for f in selected if _match_file_type(f, allowed_types)]
+    return selected
+
+
+def _files_from_dir(d: Path, *, mask=None, subdir=False, allowed_types=None) -> list[Path]:
+    if mask and subdir:
+        files = [f for f in d.rglob(mask) if f.is_file()]
+    elif mask and not subdir:
+        files = [f for f in d.glob(mask) if f.is_file()]
+    elif not mask and subdir:
+        files = [f for f in d.rglob('*') if f.is_file()]
+    else:
+        files = [f for f in d.iterdir() if f.is_file()]
+
+    if allowed_types is not None:
+        files = [f for f in files if _match_file_type(f, allowed_types)]
+    return files
+
+
+def _collect_dir_files(paths, mask=None, subdir=False, dedupe=False, file_type='all'):
+    """Collect files from directories, file-globs, dir-globs, or mixed inputs."""
+    allowed_types = _normalize_file_types(file_type)
+    files = []
+
+    for item in collection(paths):
         item_str = str(item)
         has_wildcard = any(ch in item_str for ch in '*?[')
+
         if not has_wildcard:
             p = Path(item)
-            if not p.is_dir():
-                print_color(f'Warning: {p} is not a valid path.', 'y')
-                return None
-            return [p]
+            if p.is_file():
+                files.extend(_filter_selected_files([p], mask=mask, allowed_types=allowed_types))
+                continue
+            if p.is_dir():
+                files.extend(_files_from_dir(p, mask=mask, subdir=subdir, allowed_types=allowed_types))
+                continue
+            print_color(f'Warning: {p} is not a valid path.', 'y')
+            return None
 
-        pattern = Path(item)
-        if pattern.is_absolute():
-            root = Path(pattern.anchor)
-            rel_pattern = Path(*pattern.parts[1:]).as_posix()
-        else:
-            root = Path.cwd()
-            rel_pattern = pattern.as_posix()
-
-        matches = [p for p in root.glob(rel_pattern) if p.is_dir()]
+        root, rel_pattern = _glob_parts(item)
+        matches = list(root.glob(rel_pattern))
         if not matches:
-            print_color(f'Warning: no directories match pattern {item!r}.', 'y')
+            print_color(f'Warning: no paths match pattern {item!r}.', 'y')
             return None
-        return matches
 
-    dirs = []
-    for item in collection(paths):
-        expanded = _expand_dir_item(item)
-        if expanded is None:
-            return None
-        dirs.extend(expanded)
-    if dedupe:
-        dirs = _dedupe_paths(dirs)
+        matched_files = [p for p in matches if p.is_file()]
+        if matched_files:
+            files.extend(_filter_selected_files(matched_files, mask=mask, allowed_types=allowed_types))
+            continue
 
-    files = []
-    for d in dirs:
-        if mask and subdir:
-            files.extend(f for f in d.rglob(mask) if f.is_file())
-        elif mask and not subdir:
-            files.extend(f for f in d.glob(mask) if f.is_file())
-        elif not mask and subdir:
-            files.extend(f for f in d.rglob('*') if f.is_file())
-        else:
-            files.extend(f for f in d.iterdir() if f.is_file())
+        matched_dirs = [p for p in matches if p.is_dir()]
+        if matched_dirs:
+            for d in matched_dirs:
+                files.extend(_files_from_dir(d, mask=mask, subdir=subdir, allowed_types=allowed_types))
+            continue
+
+        print_color(f'Warning: no valid files or directories match pattern {item!r}.', 'y')
+        return None
+
     return _dedupe_paths(files) if dedupe else files
 
 
-def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
-    """ Compare files between one/two dirs or dir collections and return report rows."""
-    # print("cmp-dir", kwargs)
+def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=None, output_mode='quiet', **kwargs):
+    """ Compare files between one/two dir/file inputs or glob collections and return report rows."""
+    output_mode = _resolve_top_level_output_mode('compare_dirs', output_mode, update_cli,
+                                                 kwargs.pop('progress_bar', None),)
     mask:str|None = kwargs.get("mask", None)
     subdir:bool = kwargs.get("subdir", False)
+    file_type = kwargs.get('file_type', 'all')
     _normalize_error_handling(kwargs.get('error_handling', 'auto'))
 
-    files1 = _collect_dir_files(d1, mask=mask, subdir=subdir, dedupe=True)
-    files2 = _collect_dir_files(d2, mask=mask, subdir=subdir) if d2 else None
+    files1 = _collect_dir_files(d1, mask=mask, subdir=subdir, dedupe=True, file_type=file_type)
+    files2 = _collect_dir_files(d2, mask=mask, subdir=subdir, file_type=file_type) if d2 else None
     if files1 is None or (d2 and files2 is None):
         return []
 
     total_pairs = len(files1) * (len(files1) - 1) // 2 if d2 is None else len(files1) * len(files2)
     pairs = combinations(files1, 2) if d2 is None else product(files1, files2)
-    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, total_pairs=total_pairs, **kwargs)
+    return _compare_pairs(pairs, cutoff=cutoff, output_mode=output_mode, total_pairs=total_pairs, **kwargs)
 
 
-def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, **kwargs):
+def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=None, output_mode='quiet', **kwargs):
     """ Compare file-path iterables and return the same row format as compare_dirs()."""
-    print("cmp-ls", kwargs)
+    output_mode = _resolve_top_level_output_mode(
+        'compare_lists',
+        output_mode,
+        update_cli,
+        kwargs.pop('progress_bar', None),
+    )
     def _as_file_list(items):
         paths = []
         for item in collection(items):
@@ -363,7 +490,7 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=True, *
 
     total_pairs = len(files1) * (len(files1) - 1) // 2 if files2 is None else len(files1) * len(files2)
     pairs = combinations(files1, 2) if files2 is None else product(files1, files2)
-    return _compare_pairs(pairs, cutoff=cutoff, update_cli=update_cli, total_pairs=total_pairs, **kwargs)
+    return _compare_pairs(pairs, cutoff=cutoff, output_mode=output_mode, total_pairs=total_pairs, **kwargs)
 
 def filter_results(report, cutoff:float|int=DEFAULT_CUTOFF, criteria='difference'):
     """ General filtering utility for report rows.

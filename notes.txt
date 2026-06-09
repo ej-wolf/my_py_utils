@@ -32,11 +32,11 @@
 
 15) V   check if there option to delete a row in report, if not, add it
 15b     add : operator to delete a row in report
+15) check if there option to delete a row in report, if not, add it
 
 16) values very close to 1.0, e.g. 0.9999999, are treated as 1.0, while they should not
 
 17) add default field to unique(), 'file1'
-
 ***********************
 * file_actions.py
 ***********************
