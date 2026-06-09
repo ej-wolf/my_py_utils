@@ -9,7 +9,6 @@ from compare_files import compare_files, compare_dirs, DEFAULT_CUTOFF, filter_re
 from compare_report import Report, ReportView
 from duplicates_report import quick_report, full_report
 
-
 #region Compare Files Test
 def test_cf_unit(cases, cutoff=DEFAULT_CUTOFF, **kwargs):
     """Run selected bundled directory comparisons in both compare_bytes modes."""
@@ -17,51 +16,101 @@ def test_cf_unit(cases, cutoff=DEFAULT_CUTOFF, **kwargs):
     def _files_by_name(path):
         return {p.name: p for p in path.iterdir() if p.is_file()}
 
-    rows = []
-    for label, left_dir, right_dir in cases:
-        left_files = _files_by_name(left_dir)
-        right_files = _files_by_name(right_dir)
+    def _normalize_case(case):
+        if len(case) == 3:
+            label, left, right = case
+            return label, left, right, {}
+        if len(case) == 4:
+            label, left, right, opts = case
+            if opts is None:
+                opts = {}
+            if not isinstance(opts, dict):
+                raise TypeError('4th field in test case must be a dict')
+            return label, left, right, dict(opts)
+        raise ValueError('Each test case must have 3 or 4 items')
 
-        common_names = sorted(set(left_files) & set(right_files))
-        left_only = sorted(set(left_files) - set(right_files))
-        right_only = sorted(set(right_files) - set(left_files))
+    def _capture_if_quiet(mode, func, *args, **kwargs):
+        if mode == 'quiet':
+            with contextlib.redirect_stdout(io.StringIO()):
+                return func(*args, **kwargs)
+        return func(*args, **kwargs)
+
+    rows = []
+    default_output_mode = kwargs.get('output_mode', 'both')
+    for case in cases:
+        label, left_dir, right_dir, opts = _normalize_case(case)
+        use_compare_dirs = bool(opts.get('subdir')) or ('mask' in opts) or ('file_type' in opts)
+        case_cutoff = opts.get('cutoff', cutoff)
+        auto_output_mode = 'progress' if use_compare_dirs else default_output_mode
+        case_output_mode = opts.get('output_mode', auto_output_mode)
 
         for cmp_b in (True, False):
             start = time.perf_counter()
             similarities = []
             diff_bytes = 0
             identical = 0
+            files_compared = 0
+            left_only = right_only = 'n/a'
 
-            for name in common_names:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    info = compare_files(
+            if use_compare_dirs:
+                compare_kwargs = dict(opts)
+                compare_kwargs.pop('cutoff', None)
+                compare_kwargs.pop('compare_bytes_modes', None)
+                compare_kwargs.setdefault('output_mode', case_output_mode)
+                dir_rows = _capture_if_quiet(
+                    compare_kwargs.get('output_mode', case_output_mode),
+                    compare_dirs,
+                    left_dir, right_dir,
+                    cutoff=case_cutoff,
+                    compare_bytes=cmp_b,
+                    **compare_kwargs,
+                )
+
+                files_compared = len(dir_rows)
+                for row in dir_rows:
+                    similarities.append(row['similarity'])
+                    diff_bytes += row['diff_bytes']
+                    if row['diff_bytes'] == 0:
+                        identical += 1
+            else:
+                left_files = _files_by_name(left_dir)
+                right_files = _files_by_name(right_dir)
+
+                common_names = sorted(set(left_files) & set(right_files))
+                left_only = len(sorted(set(left_files) - set(right_files)))
+                right_only = len(sorted(set(right_files) - set(left_files)))
+                files_compared = len(common_names)
+
+                for name in common_names:
+                    info = _capture_if_quiet(
+                        case_output_mode,
+                        compare_files,
                         left_files[name], right_files[name],
-                        cutoff=cutoff,
-                        update_cli=kwargs.get('cli_update', False),
+                        cutoff=case_cutoff,
+                        output_mode=case_output_mode,
                         compare_bytes=cmp_b,
                     )
 
-                similarities.append(info['similarity'])
-                diff_bytes += info['diff_bytes']
-                if info['diff_bytes'] == 0:
-                    identical += 1
+                    similarities.append(info['similarity'])
+                    diff_bytes += info['diff_bytes']
+                    if info['diff_bytes'] == 0:
+                        identical += 1
 
             elapsed = time.perf_counter() - start
             avg_similarity = sum(similarities) / len(similarities) if similarities else 0.0
             min_similarity = min(similarities) if similarities else 0.0
 
-            rows.append({
-                'case': label,
-                'compare_bytes': cmp_b,
-                'files': len(common_names),
-                'identical': identical,
-                'avg_similarity': avg_similarity,
-                'min_similarity': min_similarity,
-                'diff_bytes': diff_bytes,
-                'elapsed_sec': elapsed,
-                'left_only': len(left_only),
-                'right_only': len(right_only),
-            })
+            rows.append({ 'case': label,
+                          'compare_bytes': cmp_b,
+                          'files': files_compared,
+                          'identical': identical,
+                          'avg_similarity': avg_similarity,
+                          'min_similarity': min_similarity,
+                          'diff_bytes': diff_bytes,
+                          'elapsed_sec': elapsed,
+                          'left_only': left_only,
+                          'right_only': right_only,
+                          })
 
     print(f"{'case':28} {'byte mode':10} {'files':>5} {'ident':>5} "
           f"{'avg_sim':>10} {'min_sim':>10} {'diff_bytes':>12} {'sec':>8}")
@@ -76,15 +125,17 @@ def test_cf_unit(cases, cutoff=DEFAULT_CUTOFF, **kwargs):
               f"{row['diff_bytes']:12,d} "
               f"{row['elapsed_sec']:8.3f}")
 
-        if row['left_only'] or row['right_only']:
+        if row['left_only'] != 'n/a' and (row['left_only'] or row['right_only']):
             print(f"  unmatched files: left_only={row['left_only']} right_only={row['right_only']}")
+        elif row['left_only'] == 'n/a':
+            print("  unmatched files: n/a (directory discovery case)")
 
     return rows
 #endregion
 
 
 #region Compare Report Test
-def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*'):
+def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
     """Run a small smoke test for the report wrapper on a given directory tree."""
 
     def _check(name: str, cond: bool, detail=''):
@@ -100,8 +151,12 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*'):
         return fnmatch.fnmatch(Path(path_str).name, tst_msk)
 
     test_root = Path(test_root)
-    with contextlib.redirect_stdout(io.StringIO()):
-        report = Report.from_dirs(test_root, update_cli=False, subdir=True)
+    output_mode = kwargs.get('output_mode', 'progress')
+    if output_mode == 'quiet':
+        with contextlib.redirect_stdout(io.StringIO()):
+            report = Report.from_dirs(test_root, output_mode=output_mode, subdir=True)
+    else:
+        report = Report.from_dirs(test_root, output_mode=output_mode, subdir=True)
 
     checks = []
 
@@ -196,16 +251,17 @@ def test_dup_unit(src_dir, trg_dir, **kwargs):
 
     size_unit = 'kB'
     print_unique = kwargs.get('print_unique', False)
+    output_mode = kwargs.get('output_mode', 'progress')
+    cli_print = kwargs.get('cli_print', True)
 
     print(f'\n=== {label} ===')
     print(f'building compare rows: {label}')
-    # with contextlib.redirect_stdout(io.StringIO()):
-    rows = compare_dirs(src_dir, trg_dir, cutoff=None, update_cli=False, subdir=True, progress_bar=True)
+    rows = compare_dirs(src_dir, trg_dir, cutoff=None, subdir=True, output_mode=output_mode)
     print(f'compare rows ready: {len(rows)}')
 
     report = Report(rows)
-    quick_data = quick_report(src_dir, report, size_unit=size_unit, subdir=True, cli_print=True)
-    full_data = full_report(src_dir, report, size_unit=size_unit, subdir=True, cli_print=True)
+    quick_data = quick_report(src_dir, report, size_unit=size_unit, subdir=True, cli_print=cli_print)
+    full_data = full_report(src_dir, report, size_unit=size_unit, subdir=True, cli_print=cli_print)
 
     if print_unique:
         print('\nUnique Files:')
@@ -227,25 +283,25 @@ def test_dup_unit(src_dir, trg_dir, **kwargs):
 
 
 if __name__ == '__main__':
+    import time
     test_root = Path('test_data')
-    mix_dir = test_root / 'mix'
-    cache_dir = test_root / 'cache'
-    other_dirs = sorted(
-        p for p in test_root.iterdir()
-        if p.is_dir() and p.name != 'mix'
-    )
-    tst_cases = (
-        ['try_01 vs try_02', test_root / 'try_01_cf', test_root / 'try_02_cf'],
-        ['try_03 vs try_04', test_root / 'try_03', test_root / 'try_04'],
-        ['try_01 vs try_03', test_root / 'try_01_cf', test_root / 'try_03'],
-        ['try_01 vs try_04', test_root / 'try_01_cf', test_root / 'try_04'],
-    )
 
-    # test_cf_unit(cases=tst_cases[0:2], cli_update=True)
+    ws_vids = "/mnt/local-data/Projects/Wesmart/Video-datasets/wesmart"
+    mix_dir = test_root/'mix'
+    cache_dir = test_root/'cache'
+    other_dirs = sorted(p for p in test_root.iterdir() if p.is_dir() and p.name!='mix')
+    tst_cases = (['try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'],
+                 ['try_03 vs try_04', test_root/'try_03',    test_root/'try_04'],
+                 ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
+                 ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],
+                 ['events vs mix'   , test_root/'events',    test_root/'mix',{'subdir': True}],
+                 ['ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode':'progress'}],)
+    ws_tst = ('ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode': 'both'})
+    t0 = time.time()
+    test_cf_unit(cases=tst_cases, cli_update=True)
     print('\n' + '=' * 80 + '\n')
-    # test_cr_unit(test_root)
-    print('\n' + '=' * 80 + '\n')
-    test_dup_unit(cache_dir, mix_dir, label='cache vs mix')
-    print('\n' + '=' * 80 + '\n')
-    test_dup_unit(other_dirs, mix_dir, label='all dirs except mix vs mix', print_unique=True)
+    # test_cr_unit(test_root);    print('\n' + '=' * 80 + '\n')
+    test_dup_unit(cache_dir, mix_dir, label='cache vs mix');   print('\n' + '=' * 80 + '\n')
+    # test_dup_unit(other_dirs, mix_dir, label='all dirs except mix vs mix', print_unique=True)
+    print(f"Testing duration = {time.time()-t0:.3f}")
 #261(,4,)-> 251(,2,1)

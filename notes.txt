@@ -30,7 +30,7 @@
 
 14) if the same path (file or dir)  appears twice in file1 list, ignore the 2nd  one
 
-15) check if there option to delete a row in report, if not, add it
+15) V check if there option to delete a row in report, if not, add it
 
 ***********************
 * file_actions.py

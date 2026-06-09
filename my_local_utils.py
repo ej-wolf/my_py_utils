@@ -310,7 +310,7 @@ def _extract_zip_file(zip_path: str | Path, out_dir: str | Path | None = None):
 
 
 # --- unzip_all_to with separate_dir option ---
-def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs):
+def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs): #313
 
     zip_path, extract_to = Path(zip_path), Path(extract_to)
 
@@ -324,7 +324,7 @@ def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs):
 
     extract_to.mkdir(parents=True, exist_ok=True)
 
-    # collect zip files
+    #* collect zip files
     if zip_path.is_file():
         zip_files = [zip_path]
         base_root = zip_path.parent
@@ -340,9 +340,8 @@ def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs):
     for zf in zip_files:
 
         with zipfile.ZipFile(zf, "r") as z:
-
-            # base output dir (optionally per-archive)
-            base_out = (extract_to / zf.stem) if separate_dir else extract_to
+            #* base output dir (optionally per-archive)
+            base_out = (extract_to/zf.stem) if separate_dir else extract_to
 
             for member in z.infolist():
 
@@ -350,28 +349,23 @@ def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs):
                     continue
 
                 member_path = Path(member.filename)
-
                 # --- target path resolution ---
-                if tree_struct == "full":
-                    target = base_out / member_path
-
-                elif tree_struct == "partial":
+                if tree_struct == 'full':
+                    target = base_out/member_path
+                elif tree_struct == 'partial':
                     rel = zf.parent.relative_to(base_root)
-                    target = base_out / rel / member_path.name
-
-                elif tree_struct == "no":
-                    target = base_out / member_path.name
-
+                    target = base_out/rel/member_path.name
+                elif tree_struct == 'no':
+                    target = base_out/member_path.name
                 else:
                     raise ValueError(f"Invalid tree_struct: {tree_struct}")
-
                 target.parent.mkdir(parents=True, exist_ok=True)
 
                 # --- conflict handling ---
                 if target.exists():
-                    if conflict_policy == "auto":
+                    if conflict_policy == 'auto':
                         target = get_unique_name(target)
-                    elif conflict_policy == "rewrite":
+                    elif conflict_policy == 'rewrite':
                         pass
                     else:
                         raise ValueError(f"Invalid conflict_policy: {conflict_policy}")
@@ -379,11 +373,9 @@ def unzip_all_to(zip_path:Path|str, extract_to:Path|str, **kwargs):
                 # --- extraction ---
                 with z.open(member) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-
                 extracted.append(target)
 
     return extracted
-
 
 
 #endregion
@@ -508,7 +500,7 @@ def _load_log_lines(log_source):
     return []
 
 
-# ***** Collection casting ***** #
+#* region ***** Collection casting ***** #
 def as_collection(x):
     """  If x is a collection (list/tuple/set/range/numpy array/torch tensor/etc.)
     return it as-is. Otherwise, wrap it in a single-element list.
@@ -550,6 +542,7 @@ def as_collection(x):
 
 collection = as_collection
 
+#endregion
 
 
 if __name__ == "__main__":

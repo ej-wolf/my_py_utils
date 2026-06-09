@@ -1,7 +1,11 @@
 """ Query wrapper for compare-report rows.
     use cases:
-    report = Report.from_dirs('dir_a', 'dir_b', subdir=True, update_cli=False)
+    report = Report.from_dirs('dir_a', 'dir_b', subdir=True, output_mode='quiet')
         Build a queryable report from directory comparison.
+    report = Report.from_dirs('data/my_dir/*.zip', 'other_dir/**/*.zip', output_mode='progress')
+        Build a report from explicit file-glob inputs.
+    report = Report.from_dirs('dir_a', 'dir_b', file_type=['mp4', 'wmv'])
+        Compare only selected file extensions on both sides.
     report['file1']             :   Return list of file1 paths for all rows.
     report[5:10]['file2']       :   Return list of file2 paths from rows 5 to 10.
     report.where('file1', 'NV*'):   Select rows whose where 'file1' name matches the mask.
@@ -229,8 +233,8 @@ class _ReportBase:
 
 class Report(_ReportBase):
     @classmethod
-    def from_dirs(cls, d1, d2=None, cutoff=_DEFULT_CUTOFF, update_cli=True, **kwargs):
-        return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, update_cli=update_cli, **kwargs))
+    def from_dirs(cls, d1, d2=None, cutoff=_DEFULT_CUTOFF, update_cli=None, output_mode='quiet', **kwargs):
+        return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, update_cli=update_cli, output_mode=output_mode, **kwargs))
 
 
 class ReportView(_ReportBase):

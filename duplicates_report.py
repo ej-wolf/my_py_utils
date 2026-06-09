@@ -2,7 +2,7 @@
 
     use cases: from compare_report import Report import duplicates_report as dr
 
-        report = Report.from_dirs('src_dir', 'dup_dir', cutoff=None, update_cli=False)
+        report = Report.from_dirs('src_dir', 'dup_dir', cutoff=None, output_mode='quiet')
         dr.quick_report(src_dir, report) : Print a compact duplicate summary and return the summary data.
         dr.full_report(['src_dir', 'extra_dir'], report, threshold=0.98, size_unit='MB'):
                         Print one row per duplicate match and return grouped duplicate data.
