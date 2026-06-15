@@ -150,6 +150,16 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
     def _match_mask(path_str: str) -> bool:
         return fnmatch.fnmatch(Path(path_str).name, tst_msk)
 
+    def _family(path_str: str) -> str:
+        suffix = Path(path_str).suffix.lower()
+        if suffix in {'.avi', '.flv', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.ts', '.webm', '.wmv'}:
+            return 'videos'
+        if suffix in {'.bmp', '.gif', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp'}:
+            return 'pictures'
+        if suffix in {'.7z', '.bz2', '.gz', '.rar', '.tar', '.tgz', '.xz', '.zip'} or Path(path_str).name.lower().endswith(('.tar.gz', '.tar.bz2', '.tar.xz')):
+            return 'archives'
+        return 'other'
+
     test_root = Path(test_root)
     output_mode = kwargs.get('output_mode', 'progress')
     if output_mode == 'quiet':
@@ -207,6 +217,20 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
     except ValueError:
         conflict_ok = True
     _check('append conflict guard', conflict_ok)
+
+    mix_dir = test_root / 'mix'
+    if mix_dir.is_dir():
+        strict_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_strict')
+        loose_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_loose')
+        video_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='videos')
+        strict_ok = all(Path(row['file1']).suffix.lower() == Path(row['file2']).suffix.lower() for row in strict_rows)
+        loose_ok = all(_family(row['file1']) == _family(row['file2']) for row in loose_rows)
+        videos_ok = all(_family(row['file1']) == _family(row['file2']) == 'videos' for row in video_rows)
+        _check('same_strict pairing', strict_ok, f'rows={len(strict_rows)}')
+        _check('same_loose pairing', loose_ok, f'rows={len(loose_rows)}')
+        _check('videos pairing', videos_ok, f'rows={len(video_rows)}')
+        loose_report = Report.from_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_loose')
+        _check('Report.from_dirs same_loose', len(loose_report) == len(loose_rows), f'rows={len(loose_report)}')
 
     passed = sum(item['ok'] for item in checks)
 
@@ -295,7 +319,7 @@ if __name__ == '__main__':
                  ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
                  ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],
                  ['events vs mix'   , test_root/'events',    test_root/'mix',{'subdir': True}],
-                 ['ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode':'progress'}],)
+                 ['ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode':''}],)
     ws_tst = ('ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode': 'both'})
     t0 = time.time()
     test_cf_unit(cases=tst_cases, cli_update=True)

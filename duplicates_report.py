@@ -4,6 +4,8 @@
 
         report = Report.from_dirs('src_dir', 'dup_dir', cutoff=None, output_mode='quiet')
         dr.quick_report(src_dir, report) : Print a compact duplicate summary and return the summary data.
+        report = Report.from_dirs('src_dir', 'dup_dir', cutoff=None, file_type='same_loose')
+        dr.full_report(src_dir, report)  : Reuse a same-family-only report without extra duplicate logic changes.
         dr.full_report(['src_dir', 'extra_dir'], report, threshold=0.98, size_unit='MB'):
                         Print one row per duplicate match and return grouped duplicate data.
 """
@@ -258,7 +260,7 @@ def quick_report(file1, report, **kwargs) -> dict:
 
     return summary
 
-
+    
 def full_report(file1, report, **kwargs) -> dict:
     data = _build_dup_data(file1, report, **kwargs)
     size_unit = data['size_unit']
@@ -312,4 +314,4 @@ def full_report(file1, report, **kwargs) -> dict:
 
     print()
     return data
-#324(,1,12)
+#324(,1,12)-

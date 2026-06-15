@@ -6,6 +6,10 @@
         Build a report from explicit file-glob inputs.
     report = Report.from_dirs('dir_a', 'dir_b', file_type=['mp4', 'wmv'])
         Compare only selected file extensions on both sides.
+    report = Report.from_dirs('dir_a', 'dir_b', file_type='same_loose')
+        Compare only same-family files, e.g. videos to videos and archives to archives.
+    report = Report.from_dirs('dir_a', 'dir_b', file_type='videos')
+        Compare only video-family files.
     report['file1']             :   Return list of file1 paths for all rows.
     report[5:10]['file2']       :   Return list of file2 paths from rows 5 to 10.
     report.where('file1', 'NV*'):   Select rows whose where 'file1' name matches the mask.

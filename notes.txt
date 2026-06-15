@@ -17,27 +17,31 @@
 
 8) check the override policy
 
-9) Report.save: if the given file name has no extension, and the parent exist,
-   add '.pkl' instead of creating a dir
+9) V    Report.save: if the given file name has no extension, and the parent exist,
+        add '.pkl' instead of creating a dir
 
-10) V add option for to record only if there is  a minimum similarity
+10) V   add option for to record only if there is  a minimum similarity
 
-11) add option to search few dirs as a list or pattern
+11) V   add option to search few dirs as a list or pattern
 
-12) make Report from_dir accept a list of dirs or a pattern
+12) V   make Report from_dir accept a list of dirs or a pattern
 
-13) don't throw error if no files/dir found, just print warning
+13) ?   don't throw error if no files/dir found, just print warning
 
-14) if the same path (file or dir)  appears twice in file1 list, ignore the 2nd  one
+14) ?   if the same path (file or dir)  appears twice in file1 list, ignore the 2nd  one
 
-15) V check if there option to delete a row in report, if not, add it
+15) V   check if there option to delete a row in report, if not, add it
+15b)    add : operator to delete a row in report
 
+16) values very close to 1.0, e.g. 0.9999999, are treated as 1.0, while they should not
+
+17) add default field to unique(), 'file1'
 ***********************
 * file_actions.py
 ***********************
 1) add ':' operator to fix_numbering
 
-2) in move_files, switch 1st and 2nd arg to be more intuitive: move_files(src, dst) rather than move_files(dst, src)
+2) V    in move_files, switch 1st and 2nd arg to be more intuitive: move_files(src, dst) rather than move_files(dst, src)
 
 
 ***
@@ -64,7 +68,7 @@ Traceback (most recent call last):
     _extract_archive(archive_path, member_root)
   File "E:\Xos\Python\Projects\my_py_utils\archive_handling.py", line 102, in _extract_archive
     raise RuntimeError('; '.join(errors) if errors else f'No backend available for {archive_path}')
-RuntimeError: No backend available for d:\Deleted or lost\H2TEST_92 (L)\CH\y_d\CH\COHF - 2\alyssapark.zip
+RuntimeError: No backend available for d:\Deleted or lost\H2TEST_92 (L)\CH\...\park.zip
 
 Process finished with exit code 1
 
