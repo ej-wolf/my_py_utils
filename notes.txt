@@ -91,3 +91,19 @@ Traceback (most recent call last):
     ba = a.read(CHUNK_SIZE)
          ^^^^^^^^^^^^^^^^^^
 MemoryError
+
+R_d = Report.from_dirs(d_src,d_tg_1, subdir=True, output_mode='both', pairing_mode='same_strict' )
+all
+None
+Traceback (most recent call last):
+  File "C:\Program Files\JetBrains\PyCharm Community Edition 2024.1.4\plugins\python-ce\helpers\pydev\pydevconsole.py", line 364, in runcode
+    coro = func()
+           ^^^^^^
+  File "<input>", line 1, in <module>
+  File "E:\Xos\Python\Projects\my_py_utils\compare_report.py", line 241, in from_dirs
+    return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, output_mode=output_mode, **kwargs))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Xos\Python\Projects\my_py_utils\compare_files.py", line 172, in compare_dirs
+    return _run_prepared_compare(files1, files2, cutoff=cutoff,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: compare_files._run_prepared_compare() got multiple values for keyword argument 'pairing_mode'
