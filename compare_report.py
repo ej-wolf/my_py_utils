@@ -237,8 +237,8 @@ class _ReportBase:
 
 class Report(_ReportBase):
     @classmethod
-    def from_dirs(cls, d1, d2=None, cutoff=_DEFULT_CUTOFF, update_cli=None, output_mode='quiet', **kwargs):
-        return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, update_cli=update_cli, output_mode=output_mode, **kwargs))
+    def from_dirs(cls, d1, d2=None, cutoff=_DEFULT_CUTOFF, output_mode='progress', **kwargs):
+        return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, output_mode=output_mode, **kwargs))
 
 
 class ReportView(_ReportBase):

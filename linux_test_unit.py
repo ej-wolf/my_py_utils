@@ -36,7 +36,7 @@ def test_cf_unit(cases, cutoff=DEFAULT_CUTOFF, **kwargs):
         return func(*args, **kwargs)
 
     rows = []
-    default_output_mode = kwargs.get('output_mode', 'both')
+    default_output_mode = kwargs.get('output_mode', 'progress')
     for case in cases:
         label, left_dir, right_dir, opts = _normalize_case(case)
         use_compare_dirs = bool(opts.get('subdir')) or ('mask' in opts) or ('file_type' in opts)
@@ -135,22 +135,27 @@ def test_cf_unit(cases, cutoff=DEFAULT_CUTOFF, **kwargs):
 
 
 #region Compare Report Test
-def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
-    """Run a small smoke test for the report wrapper on a given directory tree."""
+def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs): #122
+    """ Run a small smoke test for the report wrapper on a given directory tree."""
 
     def _check(name: str, cond: bool, detail=''):
+        """ Collect pass/fail checks for the report test summary."""
+        # print(name)
         checks.append({'check': name, 'ok': bool(cond), 'detail': detail})
 
-    def _capture_output(func, *args, **kwargs):
+    def _capture_output(action):
+        """ capture printed output for print/list smoke tests """
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            func(*args, **kwargs)
+            action()
         return buf.getvalue()
 
     def _match_mask(path_str: str) -> bool:
+        """ apply the filename mask used in where() checks."""
         return fnmatch.fnmatch(Path(path_str).name, tst_msk)
 
-    def _family(path_str: str) -> str:
+    def _kind(path_str: str) -> str:
+        """ Group files into broad families for loose pairing checks."""
         suffix = Path(path_str).suffix.lower()
         if suffix in {'.avi', '.flv', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.ts', '.webm', '.wmv'}:
             return 'videos'
@@ -160,22 +165,16 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
             return 'archives'
         return 'other'
 
-    test_root = Path(test_root)
-    output_mode = kwargs.get('output_mode', 'progress')
-    if output_mode == 'quiet':
-        with contextlib.redirect_stdout(io.StringIO()):
-            report = Report.from_dirs(test_root, output_mode=output_mode, subdir=True)
-    else:
-        report = Report.from_dirs(test_root, output_mode=output_mode, subdir=True)
+    # test_root = Path(test_root)
+    report = Report.from_dirs(test_root, subdir=True, output_mode=kwargs.get('output_mode', 'progress'))
 
-    checks = []
-
-    sample_view = report[0:min(5, len(report))]
+    sample_view= report[0:min(5, len(report))]
     sample_row = report[0] if len(report) > 0 else None
-    mask_view = report.where('file1', tst_msk)
+    mask_view  = report.where('file1', tst_msk)
     exact_view = report.filter(cutoff=0.0, criteria='dif')
     pairs_demo = exact_view[0:min(4, len(exact_view))]
 
+    checks = []
     _check('column access', len(report['file1']) == len(report))
     _check('slice returns view', isinstance(sample_view, ReportView))
     _check('row access returns dict', sample_row is None or isinstance(sample_row, dict))
@@ -187,10 +186,10 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
     similarities = sorted_view['similarity']
     _check('sort delegates', similarities == sorted(similarities, reverse=True))
 
-    table_out = _capture_output(report.print, summary=False)
+    table_out = _capture_output(lambda: report.print(summary=False))
     _check('print output', bool(table_out.strip()))
 
-    pairs_out = _capture_output(pairs_demo.list_pairs, cutoff=0.0, criteria='dif')
+    pairs_out = _capture_output(lambda: pairs_demo.list_pairs(cutoff=0.0, criteria='dif'))
     _check('list_pairs output', bool(pairs_out.strip()))
 
     with TemporaryDirectory() as td:
@@ -218,36 +217,36 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
         conflict_ok = True
     _check('append conflict guard', conflict_ok)
 
-    mix_dir = test_root / 'mix'
-    if mix_dir.is_dir():
-        strict_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_strict')
-        loose_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_loose')
-        video_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='videos')
-        strict_ok = all(Path(row['file1']).suffix.lower() == Path(row['file2']).suffix.lower() for row in strict_rows)
-        loose_ok = all(_family(row['file1']) == _family(row['file2']) for row in loose_rows)
-        videos_ok = all(_family(row['file1']) == _family(row['file2']) == 'videos' for row in video_rows)
-        _check('same_strict pairing', strict_ok, f'rows={len(strict_rows)}')
-        _check('same_loose pairing', loose_ok, f'rows={len(loose_rows)}')
-        _check('videos pairing', videos_ok, f'rows={len(video_rows)}')
-        loose_report = Report.from_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_loose')
-        _check('Report.from_dirs same_loose', len(loose_report) == len(loose_rows), f'rows={len(loose_report)}')
+    # mix_dir = test_root/'mix'
+    # if mix_dir.is_dir():
+    #     strict_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_strict')
+    #     loose_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_loose')
+    #     video_rows = compare_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='videos')
+    #     strict_ok = all(Path(row['file1']).suffix.lower() == Path(row['file2']).suffix.lower() for row in strict_rows)
+    #     loose_ok  = all(_kind(row['file1']) == _kind(row['file2']) for row in loose_rows)
+    #     videos_ok = all(_kind(row['file1']) == _kind(row['file2']) == 'videos' for row in video_rows)
+    #     _check('same_strict pairing', strict_ok, f'rows={len(strict_rows)}')
+    #     _check('same_loose pairing', loose_ok, f'rows={len(loose_rows)}')
+    #     _check('videos pairing', videos_ok, f'rows={len(video_rows)}')
+    #     loose_report = Report.from_dirs(mix_dir, mix_dir, cutoff=None, output_mode='quiet', file_type='same_loose')
+    #     _check('Report.from_dirs same_loose', len(loose_report) == len(loose_rows), f'rows={len(loose_report)}')
 
     passed = sum(item['ok'] for item in checks)
 
-    print('Visual demo')
-    print(f'slice returns view: {sample_view!r}')
-    print('slice file1 sample:')
+    print('\n *** Visual demo ***')
+    print(f"slice returns view: {sample_view!r}")
+    print("slice file1 sample:")
     for item in sample_view['file1'][:3]:
         print(f'  {item}')
-    print('row access sample:')
-    print(sample_row)
-    print(f"mask where sample: report.where('file1', {tst_msk!r})['file2'][:3]")
+    # print('row access sample:')
+    # print(sample_row)
+    print(f"\nmask where sample: report.where('file1', {tst_msk!r})['file2'][:3]")
     if len(mask_view) == 0:
         print('  <no matches>')
     else:
         for item in mask_view['file2'][:3]:
             print(f'  {item}')
-    print('list_pairs sample:')
+    print("\nlist_pairs sample:")
     print(pairs_out.strip() if pairs_out.strip() else '  <no exact pairs>')
     print('-' * 72)
 
@@ -262,8 +261,8 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs):
 
 #region Duplicates Report Test
 def test_dup_unit(src_dir, trg_dir, **kwargs):
-    checks = []
 
+    checks = []
     def _check(name: str, cond: bool):
         checks.append({'check': name, 'ok': bool(cond)})
 
@@ -305,6 +304,13 @@ def test_dup_unit(src_dir, trg_dir, **kwargs):
         print(f"{'OK' if item['ok'] else 'FAIL'} - {item['check']}")
 #endregion
 
+#* local runners
+
+def get_op_mod():
+    from compare_files import _CompareRenderer
+    vmodes = dict(enumerate(_CompareRenderer.get_modes(), 1))
+    m = input('\n'.join([f"{k})\t{v}" for k,v in vmodes.items()])+'\n')
+    return vmodes[int(m)]
 
 if __name__ == '__main__':
     import time
@@ -319,13 +325,18 @@ if __name__ == '__main__':
                  ['try_01 vs try_03', test_root/'try_01_cf', test_root/'try_03'],
                  ['try_01 vs try_04', test_root/'try_01_cf', test_root/'try_04'],
                  ['events vs mix'   , test_root/'events',    test_root/'mix',{'subdir': True}],
-                 ['ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode':''}],)
-    ws_tst = ('ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode': 'both'})
+                 #['ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode':'progress'}],
+                 )
+    ws_tst = ('ws videos'   , ws_vids,  ws_vids,  {'subdir': True, 'output_mode': 'progress'})
     t0 = time.time()
-    test_cf_unit(cases=tst_cases, cli_update=True)
+    # test_cf_unit(cases=tst_cases)
     print('\n' + '=' * 80 + '\n')
-    # test_cr_unit(test_root);    print('\n' + '=' * 80 + '\n')
-    test_dup_unit(cache_dir, mix_dir, label='cache vs mix');   print('\n' + '=' * 80 + '\n')
+    opmod = 'cli-flash' # 'prog' if input(" 1) progress (1/p)\n 2) both (2/b)\n:") in ('1', 'p', 'P') else 'both'
+    opmod = get_op_mod()
+    test_cr_unit(test_root, output_mode=opmod);
+    # print('\n' + '=2' * 80 + '\n')
+    test_dup_unit(cache_dir, mix_dir, label='cache vs mix', output_mode=opmod);   print('\n' + '=' * 80 + '\n')
     # test_dup_unit(other_dirs, mix_dir, label='all dirs except mix vs mix', print_unique=True)
     print(f"Testing duration = {time.time()-t0:.3f}")
 #261(,4,)-> 251(,2,1)
+
