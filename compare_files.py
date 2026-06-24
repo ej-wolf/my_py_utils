@@ -1,4 +1,4 @@
-import time, fnmatch, pickle
+import fnmatch, pickle, sys
 from pathlib import Path
 from itertools import combinations, product
 # from collections.abc import Iterable
@@ -22,33 +22,24 @@ _ARCHIVE_SUFFIXES_SORTED = sorted(_ARCHIVE_SUFFIXES, key=len, reverse=True)
 
 
 # region API
-def compare_files(f1: str | Path, f2: str | Path, output_mode='quiet', **kwargs) -> dict:
+def compare_files(f1:str|Path, f2:str|Path, **kwargs) -> dict:
     """ Compare two files and return similarity, coverage, diff size, and chunk info."""
 
-    progress = lambda: (offset / max_size) * 100
+    progress = lambda: (offset/max_size)*100
 
     def emit_progress(pct: float):
-        nonlocal last_progress_pct, last_print
+        nonlocal last_progress_pct
         pct = round(float(pct), 2)
         if pct == last_progress_pct:
             return
         last_progress_pct = pct
         if progress_cb:
             progress_cb(pct)
-        elif output_mode in {'cli', 'both'}:
-            now = time.time()
-            if now - last_print >= 5 or pct >= 100.0:
-                print(f"\rProgress: {pct:6.2f}%", end="", flush=True)
-                last_print = now
 
     cutoff = kwargs.pop('cutoff', DEFAULT_CUTOFF)
-    output_mode = _normalize_output_mode(output_mode)
     progress_cb = kwargs.pop('progress_cb', None)
-    update_cli = kwargs.pop('update_cli', None)
     compare_bytes = kwargs.pop('compare_bytes', True)
     list_chunks = kwargs.pop('list_chunks', True)
-    if update_cli is not None:
-        output_mode = 'cli' if update_cli else 'quiet'
 
     f1, f2 = Path(f1), Path(f2)
     size1, size2 = f1.stat().st_size, f2.stat().st_size
@@ -67,10 +58,7 @@ def compare_files(f1: str | Path, f2: str | Path, output_mode='quiet', **kwargs)
         info['note'] = "skipped due to size difference"
         return info
 
-    offset = 0
-    diff_bytes = 0
-    searched_bytes = 0
-    last_print = time.time()
+    offset,diff_bytes, searched_bytes = 0, 0, 0
     last_progress_pct = None
     stopped_threshold = False
     chunk_count = 0
@@ -143,13 +131,11 @@ def compare_files(f1: str | Path, f2: str | Path, output_mode='quiet', **kwargs)
     if list_chunks:
         for i, (start, end) in enumerate(chunks, 1):
             eof_flag = end >= max_size - 1
-            chunk_list.append({
-                'chunk': f"{i:04d}",
-                'from': f"{start:07d}",
-                'to': f"{end:07d}" + (" (EOF)" if eof_flag else ""),
-                'total_bytes': end - start + 1,
-            })
-
+            chunk_list.append({'chunk': f"{i:04d}",
+                               'from': f"{start:07d}",
+                               'to': f"{end:07d}" + (" (EOF)" if eof_flag else ""),
+                               'total_bytes': end - start + 1,
+                               })
     complete = 1.0 if not stopped_threshold else searched_bytes / max_size
     similarity = 1 - (diff_bytes / max_size)
 
@@ -162,25 +148,14 @@ def compare_files(f1: str | Path, f2: str | Path, output_mode='quiet', **kwargs)
             'note': None,
             }
     if progress_cb:
-        emit_progress(100 * complete)
-    elif output_mode in {'cli', 'both'} and not stopped_threshold:
-        print(f"\rSimilarity: {similarity: 0.5f}\n", end='', flush=True)
-    elif stopped_threshold and output_mode in {'cli', 'both'}:
-        print(f"\rProgress: {100 * complete:6.2f}% -Skipped!\n")
-        info['note'] = f"stopped by cutoff at byte {searched_bytes} ({complete:.3%})\n"
+        emit_progress(100*complete)
 
     return info
 
 
-def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=None, output_mode='quiet', **kwargs):
+def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, output_mode='quiet', **kwargs):
     """ Compare files between one/two dir/file inputs or glob collections and return report rows."""
 
-    output_mode = _resolve_api_output_mode(
-        'compare_dirs',
-        output_mode,
-        update_cli,
-        kwargs.pop('progress_bar', None),
-    )
     mask: str | None = kwargs.get("mask", None)
     subdir: bool = kwargs.get("subdir", False)
     file_type = kwargs.get('file_type', 'all')
@@ -196,11 +171,8 @@ def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, update_cli=None, output_mod
         output_mode=output_mode, pairing_mode=pairing_mode, **kwargs,)
 
 
-def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=None, output_mode='quiet', **kwargs):
+def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, output_mode='quiet', **kwargs):
     """ Compare file-path iterables and return the same row format as compare_dirs()."""
-
-    output_mode = _resolve_api_output_mode('compare_lists', output_mode, update_cli,
-                                            kwargs.pop('progress_bar', None),)
 
     def _as_file_list(items):
         paths = []
@@ -229,13 +201,14 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, update_cli=None, o
                                   pairing_mode=pairing_mode, **kwargs,)
 
 
-def filter_results(report, cutoff: float | int = DEFAULT_CUTOFF, criteria='difference'):
+def filter_results(report, cutoff: float|int|None=DEFAULT_CUTOFF, criteria='difference'):
     """ General filtering utility for report rows.
+        :param report: ...
         :param numeric cutoff: treated as cutoff for similarity/difference
         :param string cutoff: treated as a filename mask (Pathlib style) file1 or file2
         :param criteria:  'difference': keep rows with similarity >= (1 - cutoff)
-                          'similarity': keep exact rows with similarity >= cutoff
-                          'similarity_max': keep rows with similarity >= cutoff
+                          'similarity': keep exact rows with similarity  >= cutoff
+                          'similarity_max': keep rows with similarity   >= cutoff
                           'complete': keep rows with searched coverage >= cutoff
                           'file1', 'file2': Apply mask (Pathlib style) passed by cutoff
                                            to file1 (default) or file2 if criteria='file2'
@@ -317,8 +290,7 @@ def print_cmp_info(report, **kwargs):
               f"{r['size']:^15,} "
               f"{r['similarity']:^0.5f} "
               f"{r['complete']:>10.3f} "
-              f"{r['diff_bytes']:>12,}"
-              )
+              f"{r['diff_bytes']:>12,}")
         printed_rows += 1
         total_size += r['size']
         total_similarity += r['similarity']
@@ -331,7 +303,6 @@ def print_cmp_info(report, **kwargs):
 
 def list_pairs(report, **kwargs):
     """ Print full file paths for pairs whose exact difference is within cutoff."""
-
     for r in filter_results(report, **kwargs):
         print(f"Similarity: {r['similarity']}; Size: {r['size']}")
         print(r['file1'])
@@ -341,15 +312,13 @@ def list_pairs(report, **kwargs):
 
 def quick_print(report, **kwargs):
     """Filter, sort, and print a compact report in one call."""
-    r = sort_results(
-        filter_results(report, kwargs.get('cutoff', DEFAULT_CUTOFF)),
-        criteria=kwargs.get('criteria', 'difference'),
-    )
+    r = sort_results( filter_results(report, kwargs.get('cutoff', DEFAULT_CUTOFF)),
+                      criteria=kwargs.get('criteria', 'difference'),)
     print_cmp_info(r, summary=kwargs.get('summary', True))
 
 
 def save_report(report: list, path: Path | str = None, **kwargs):
-    """Save a report list as pickle with optional chunk stripping and key normalization."""
+    """ Save a report list as pickle with optional chunk stripping and key normalization."""
 
     def normalize_keys(data: dict):
         if legacy:
@@ -378,15 +347,15 @@ def save_report(report: list, path: Path | str = None, **kwargs):
     def resolve_target(path_value):
         cwd = Path.cwd()
         if path_value is None:
-            return get_unique_name(cwd / 'report.pkl')
+            return get_unique_name(cwd/'report.pkl')
 
         p = Path(path_value)
         if p.suffix:
-            return p if p.is_absolute() else cwd / p
+            return p if p.is_absolute() else cwd/p
 
-        p = p if p.is_absolute() else cwd / p
+        p = p if p.is_absolute() else cwd/p
         if p.exists() and p.is_dir():
-            return get_unique_name(p / 'report.pkl')
+            return get_unique_name(p/'report.pkl')
 
         return p.with_suffix('.pkl')
 
@@ -419,12 +388,6 @@ def _empty_info():
 def _normalize_error_handling(mode: str) -> str:
     if mode not in {'auto', 'manual'}:
         raise ValueError("error_handling must be 'auto' or 'manual'")
-    return mode
-
-
-def _normalize_output_mode(mode: str) -> str:
-    if mode not in {'quiet', 'progress', 'cli', 'both'}:
-        raise ValueError("output_mode must be 'quiet', 'progress', 'cli', or 'both'")
     return mode
 
 
@@ -490,140 +453,225 @@ def _dedupe_paths(paths) -> list[Path]:
     return unique
 
 
-def _print_progress(label: str, current: int, total: int, last_pct: int = -1) -> int:
-    if total <= 0:
-        return last_pct
+class _CompareRenderer: #170
+    _VALID_MODES = ('quiet', 'cli', 'cli-flash', 'prog-bar', 'both')
+    _PROGRESS_ALIASES = {'prog', 'progress', 'prog-bar', 'progbar'}
+    _CLI_FLASH_ALIASES = {'flash'}
 
-    pct = int((100 * current) / total)
-    if pct == last_pct and current < total:
-        return last_pct
-
-    filled = int((BAR_W * current) / total)
-    bar = '#' * filled + '.' * (BAR_W - filled)
-    line = f'{label:<18} [{bar}] {pct:3d}% ({current}/{total})'
-    print(f'\r{line}', end='', flush=True)
-    if current >= total:
-        print(f'\r{" " * len(line)}\r', end='', flush=True)
-    return pct
-
-
-def _resolve_api_output_mode(compare_name: str, output_mode:str, update_cli, progress_bar) -> str:
-    output_mode = _normalize_output_mode(output_mode)
-    if update_cli is not None or progress_bar is not None:
-        print_color(f"Warning: {compare_name}() ignores legacy 'update_cli'/'progress_bar'; "
-                         f"use output_mode={output_mode!r}.",'y', )
-    return output_mode
+    def __init__(self, mode: str, total_pairs: int):
+        self._is_tty = sys.stdout.isatty()
+        self.mode = self._normalize_mode(mode)
+        self.total_pairs = total_pairs
+        self._progress_pct = 0
+        self._compared_pairs = 0
+        self._printed_lines = 0
+        self._last_cli_header = ''
+        self._last_cli_status = ''
+        self._last_pair_progress = None
 
 
-def _render_dual_progress(done_pairs: int, total_pairs: int, pair_label: str, pair_pct: float, state: dict):
-    total_pct = int((100 * done_pairs) / total_pairs) if total_pairs > 0 else 0
-    filled = int((BAR_W * done_pairs) / total_pairs) if total_pairs > 0 else 0
-    bar = '#' * filled + '.' * (BAR_W - filled)
-    line1 = f"Total progress    [{bar}] {total_pct:3d}% ({done_pairs}/{total_pairs})"
-    line2 = f"comparing:  {pair_label[:46]:<46} : {pair_pct:6.2f}%"
+    @staticmethod
+    def get_modes():
+        return list(_CompareRenderer._VALID_MODES)
 
-    if state.get('drawn'):
-        print('\x1b[2F', end='')
-    print(f'\r\x1b[2K{line1}')
-    print(f'\r\x1b[2K{line2}', end='', flush=True)
-    state['drawn'] = True
-    state['width'] = max(len(line1), len(line2), state.get('width', 0))
+    def _normalize_mode(self, mode: str) -> str:
+        mode = str(mode).strip().lower()
+        if mode == 'both':
+            if self._is_tty:
+                return 'both'
+            print_color("both mode requires a TTY; using prog-bar mode", 'y')
+            return 'prog-bar'
+        if mode in self._PROGRESS_ALIASES:
+            return 'prog-bar'
+        if mode in self._CLI_FLASH_ALIASES:
+            return 'cli-flash'
+        if mode not in self._VALID_MODES:
+            print_color(f"Warning: invalid output_mode {mode!r}; using quiet mode", 'y')
+            return 'quiet'
+        return mode
 
+    def _progress_line(self):
+        filled = int((BAR_W * self._progress_pct) / 100)
+        bar = '#' * filled + '.' * (BAR_W - filled)
+        return f'{"Total progress":<18} [{bar}] {self._progress_pct:5.1f}% ({self._compared_pairs}/{self.total_pairs})'
 
-def _clear_dual_progress(state: dict):
-    if not state.get('drawn'):
-        return
-    width = state.get('width', 0)
-    print('\x1b[2F', end='')
-    print(f'\r\x1b[2K{" " * width}')
-    print(f'\r\x1b[2K{" " * width}', end='\r', flush=True)
-    state.clear()
+    def _both_status_line(self):
+        pct = '0.0%' if self._last_pair_progress is None else f'{self._last_pair_progress:.1f}%'
+        return f'{self._last_cli_header}:\t{pct} ...'
 
+    def _clear_live_lines(self):
+        if not self._printed_lines:
+            return
+        if self._printed_lines == 1:
+            print('\r\x1b[2K', end='', flush=True)
+        else:
+            print('\r\x1b[2K\x1b[F\r\x1b[2K', end='', flush=True)
+        self._printed_lines = 0
 
-def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, output_mode='quiet', **kwargs):
+    def _flash_cli_lines(self):
+        self._clear_live_lines()
+        if self._is_tty:
+            line1 = self._last_cli_header
+            line2 = self._last_cli_status
+            print(f'\r{line1}\n{line2}', end='', flush=True)
+            self._printed_lines = 2
+            return
+        line = self._both_status_line()
+        print(f'\r{line}', end='', flush=True)
+        self._printed_lines = 1
+
+    def _render_both(self):
+        self._clear_live_lines()
+        progress_line = self._progress_line()
+        status_line = self._both_status_line()
+        print(f'\r{progress_line}\n{status_line}', end='', flush=True)
+        self._printed_lines = 2
+
+    def _pair_progress_line(self):
+        if self._last_pair_progress is None:
+            return 'Progress :'
+        return f'Progress : {self._last_pair_progress:5.1f}%'
+
+    def _print_cli_block(self):
+        print(self._last_cli_header)
+        print(self._last_cli_status)
+
+    def _render_cli_state(self):
+        if self.mode == 'cli':
+            self._print_cli_block()
+        elif self.mode == 'both':
+            self._render_both()
+        elif self.mode == 'cli-flash':
+            self._flash_cli_lines()
+
+    def print_cli(self, line: str, *, status: bool = False):
+        if self.mode not in {'cli', 'cli-flash', 'both'}:
+            return
+        if status:
+            self._last_cli_status = line
+        else:
+            self._last_cli_header = line
+            self._last_cli_status = self._pair_progress_line()
+        self._render_cli_state()
+
+    def update_progress(self, idx: int):
+        self._compared_pairs = idx
+        self._progress_pct = 100 * idx / self.total_pairs if self.total_pairs > 0 else 100.0
+
+    def print_prog_bar(self):
+        if self.mode not in {'prog-bar', 'both'}:
+            return
+        if self.mode == 'both':
+            self._render_both()
+            return
+        line = self._progress_line()
+        self._printed_lines = 1
+        print(f'\r{line}', end='', flush=True)
+
+    def finish_prog_bar(self):
+        if self.mode not in {'prog-bar', 'both'}:
+            return
+        pct = 100*self._compared_pairs/self.total_pairs if self.total_pairs > 0 else 100.0
+        self._progress_pct = pct
+        self._clear_live_lines()
+        print(f'Compare finished:\t{pct:.3g}% of {self._compared_pairs}/{self.total_pairs} comparisons complete.')
+
+    def start_pair(self, f1: Path, f2: Path, _idx: int):
+        self._last_pair_progress = None
+        self.print_cli(f'Comparing:   {_short_name(f1)}   vs.  {_short_name(f2)}')
+
+    def update_pair_progress(self, pct: float):
+        if self.mode not in {'cli', 'cli-flash', 'both'}:
+            return
+        pct = round(float(pct), 2)
+        if pct >= 100.0 or pct == self._last_pair_progress:
+            return
+        self._last_pair_progress = pct
+        self._last_cli_status = self._pair_progress_line()
+        self._render_cli_state()
+
+    def finish_pair(self, _f1: Path, _f2: Path, info: dict, idx: int):
+        self.update_progress(idx)
+        self.print_prog_bar()
+        if info['complete'] < 1.0:
+            pct = 100 * info['complete']
+            self.print_cli(f'Skipped:\t{pct:5.1f}% - completed', status=True)
+            return
+        self.print_cli(f'Similarity:\t{info["similarity"]:.3f}', status=True)
+
+    def skip_pair(self, _f1: Path, _f2: Path, info: dict, idx: int):
+        self.update_progress(idx)
+        self.print_prog_bar()
+        self.print_cli(f'Progress : {info["note"]}', status=True)
+
+    def fail_pair(self, _f1: Path, _f2: Path, idx: int):
+        self.update_progress(idx)
+        self.print_prog_bar()
+
+    def close(self):
+        if self.mode in {'cli-flash', 'both'}:
+            self._clear_live_lines()
+        self.finish_prog_bar()
+
+def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, output_mode='prog', **kwargs):
     """ Compare prepared file pairs and return report rows."""
-    def _warn_pair_failure(stage: str, f1: Path, f2: Path, exc: OSError) -> bool:
+    def _warn_pair_failure(stage: str, f_1:Path, f_2:Path, err:OSError) -> bool:
         message = '\n'.join(( "Warning: compare skipped for",
-                              f'  file1: {f1}',  f'  file2: {f2}',
-                              f'  stage: {stage}', f'  reason: {exc}', ))
+                              f"  file1: {f_1}", f"  file2: {f_2}",
+                              f"  stage: {stage}", f"  reason: {err}",))
         print_color(message, 'y')
         if error_handling == 'auto':
             return False
-
         answer = input('Abort comparison? [y/N]: ').strip().lower()
         return answer in {'y', 'yes'}
 
     sz_dis = kwargs.pop('size_dis', cutoff)
     error_handling = _normalize_error_handling(kwargs.pop('error_handling', 'auto'))
     total_pairs = int(kwargs.pop('total_pairs', 0) or 0)
-    output_mode = _normalize_output_mode(output_mode)
-    show_pair_bar = output_mode == 'progress'
-    show_cli = output_mode == 'cli'
-    show_both = output_mode == 'both'
+    renderer = _CompareRenderer(output_mode, total_pairs)
     min_complete = None if cutoff is None else min(1.0, 1.5 * cutoff)
-    report = []
-    last_pct = -1
-    dual_state = {}
 
+    report = []
     for idx, (f1, f2) in enumerate(pairs, 1):
+        renderer.start_pair(f1, f2, idx)
         try:
-            size1 = f1.stat().st_size
-            size2 = f2.stat().st_size
-            max_size = max(size1, size2)
+            size1, size2 = f1.stat().st_size, f2.stat().st_size
+            max_size  = max(size1,  size2)
             size_diff = abs(size1 - size2)
-        except OSError as exc:
+        except OSError as   exc:
             if _warn_pair_failure('stat', f1, f2, exc):
                 raise RuntimeError(f'Comparison aborted for pair: {f1} vs {f2}') from exc
+            renderer.fail_pair(f1, f2, idx)
             continue
-
         try:
             info = None
             if sz_dis is not None and size_diff > max_size * sz_dis:
                 info = _empty_info()
-                info['note'] = 'skipped due to size difference'
+                info['note'] = '\tskipped due to size difference'
+                renderer.skip_pair(f1, f2, info, idx)
             else:
-                if show_both:
-                    pair_label = f'{_short_name(f1)}   vs.  {_short_name(f2)} ->'
-                    _render_dual_progress(idx - 1, total_pairs, pair_label, 0.0, dual_state)
-                    info = compare_files(
-                        f1,
-                        f2,
-                        cutoff=cutoff,
-                        output_mode='quiet',
-                        progress_cb=lambda pct, i=idx, label=pair_label: _render_dual_progress(i - 1, total_pairs, label, pct, dual_state),
-                        **kwargs,
-                    )
-                    _render_dual_progress(idx, total_pairs, pair_label, 100.0 * info['complete'], dual_state)
-                else:
-                    if show_cli:
-                        print(f'{_short_name(f1)}   vs.  {_short_name(f2)} -> comparing:')
-                    info = compare_files(f1, f2, cutoff=cutoff, output_mode='cli' if show_cli else 'quiet', **kwargs)
+                info = compare_files( f1, f2, cutoff=cutoff,
+                                      progress_cb=renderer.update_pair_progress,
+                                      **kwargs,)
+                renderer.finish_pair(f1, f2, info, idx)
         except OSError as exc:
             if _warn_pair_failure('compare', f1, f2, exc):
-                _clear_dual_progress(dual_state)
                 raise RuntimeError(f'Comparison aborted for pair: {f1} vs {f2}') from exc
-            if show_pair_bar:
-                last_pct = _print_progress('Total progress', idx, total_pairs, last_pct)
-            elif show_both:
-                _render_dual_progress(idx, total_pairs, f'{_short_name(f1)}   vs.  {_short_name(f2)} ->', 0.0, dual_state)
+            renderer.fail_pair(f1, f2, idx)
             continue
 
-        row = {
-            'file1': str(f1),
-            'file2': str(f2),
-            'size': info['size'],
-            'similarity': info['similarity'],
-            'diff_bytes': info['diff_bytes'],
-            'chunks_num': info['chunks_num'],
-            'complete': info['complete'],
-            'info': info,
-        }
+        row = { 'file1': str(f1),
+                'file2': str(f2),
+                'size': info['size'],
+                'similarity': info['similarity'],
+                'diff_bytes': info['diff_bytes'],
+                'chunks_num': info['chunks_num'],
+                'complete': info['complete'],
+                'info': info,
+                }
         if min_complete is None or row['complete'] >= min_complete:
             report.append(row)
-        if show_pair_bar:
-            last_pct = _print_progress('Total progress', idx, total_pairs, last_pct)
-    if show_both:
-        _clear_dual_progress(dual_state)
+    renderer.close()
 
     return report
 
@@ -781,4 +829,5 @@ def _run_prepared_compare(files1, files2=None, *, cutoff, output_mode, pairing_m
     return _compare_pairs(pairs, cutoff=cutoff, output_mode=output_mode, total_pairs=total_pairs, **kwargs)
 # endregion Helpers
 
-#808(2,6,1) -> 784#(2,4,)
+#808(2,6,1) -> 784#(2,4,) -> 775->755
+#842(2,5,) cln-up->  830
