@@ -159,16 +159,17 @@ def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, output_mode='quiet', **kwar
     mask: str | None = kwargs.get("mask", None)
     subdir: bool = kwargs.get("subdir", False)
     file_type = kwargs.get('file_type', 'all')
+    pairing_override = kwargs.pop('pairing_mode', None)
     _normalize_error_handling(kwargs.get('error_handling', 'auto'))
     pairing_mode, allowed_types = _resolve_file_type_mode(file_type)
-    # pairing_mode = "same_strict"; allowed_types = 'all'
+    if pairing_override is not None:
+        pairing_mode = str(pairing_override).strip().lower()
+
     files1 = _collect_dir_files(d1, mask=mask, subdir=subdir, dedupe=True, file_type=allowed_types or 'all')
     files2 = _collect_dir_files(d2, mask=mask, subdir=subdir, file_type=allowed_types or 'all') if d2 else None
     if files1 is None or (d2 and files2 is None):
         return []
 
-    print_color(pairing_mode, 'r')
-    print_color(allowed_types, 'r')
     return _run_prepared_compare(files1, files2, cutoff=cutoff,
         output_mode=output_mode, pairing_mode=pairing_mode, **kwargs,)
 

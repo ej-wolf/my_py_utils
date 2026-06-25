@@ -36,6 +36,9 @@
 16) values very close to 1.0, e.g. 0.9999999, are treated as 1.0, while they should not
 
 17) add default field to unique(), 'file1'
+
+18) avoid pairing file to itself (e.g. in test_pairing_modes(mix_dir, test_root)  )
+
 ***********************
 * file_actions.py
 ***********************
@@ -92,6 +95,7 @@ Traceback (most recent call last):
          ^^^^^^^^^^^^^^^^^^
 MemoryError
 
+**************************************************
 R_d = Report.from_dirs(d_src,d_tg_1, subdir=True, output_mode='both', pairing_mode='same_strict' )
 all
 None
