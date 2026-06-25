@@ -159,8 +159,11 @@ def compare_dirs(d1, d2=None, cutoff=DEFAULT_CUTOFF, output_mode='quiet', **kwar
     mask: str | None = kwargs.get("mask", None)
     subdir: bool = kwargs.get("subdir", False)
     file_type = kwargs.get('file_type', 'all')
+    pairing_override = kwargs.pop('pairing_mode', None)
     _normalize_error_handling(kwargs.get('error_handling', 'auto'))
     pairing_mode, allowed_types = _resolve_file_type_mode(file_type)
+    if pairing_override is not None:
+        pairing_mode = str(pairing_override).strip().lower()
 
     files1 = _collect_dir_files(d1, mask=mask, subdir=subdir, dedupe=True, file_type=allowed_types or 'all')
     files2 = _collect_dir_files(d2, mask=mask, subdir=subdir, file_type=allowed_types or 'all') if d2 else None
@@ -193,7 +196,10 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, output_mode='quiet
     files1 = _dedupe_paths(files1)
 
     mask: str | None = kwargs.get('mask', None)
+    pairing_override = kwargs.pop('pairing_mode', None)
     pairing_mode, allowed_types = _resolve_file_type_mode(kwargs.get('file_type', 'all'))
+    if pairing_override is not None:
+        pairing_mode = str(pairing_override).strip().lower()
     files1 = _apply_file_filters(files1, mask=mask, allowed_types=allowed_types)
     files2 = _apply_file_filters(files2, mask=mask, allowed_types=allowed_types) if files2 else None
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from compare_files import compare_files, compare_dirs, DEFAULT_CUTOFF, filter_results
+# from compare_files import _VIDEO_SUFFIXES, _PICTURE_SUFFIXES, _ARCHIVE_SUFFIXES
 from compare_report import Report, ReportView
 from duplicates_report import quick_report, full_report
 
@@ -304,6 +305,69 @@ def test_dup_unit(src_dir, trg_dir, **kwargs):
         print(f"{'OK' if item['ok'] else 'FAIL'} - {item['check']}")
 #endregion
 
+
+def test_pairing_modes(d1, d2, **kwargs):
+    import time
+
+    from compare_files import _VIDEO_SUFFIXES, _PICTURE_SUFFIXES, _ARCHIVE_SUFFIXES
+    def _family(path_like) -> str:
+        p = Path(path_like)
+        name = p.name.lower()
+        suffix = p.suffix.lower()
+        if suffix in _VIDEO_SUFFIXES:
+            return 'videos'
+        if suffix in _PICTURE_SUFFIXES:
+            return 'pictures'
+        if suffix in _ARCHIVE_SUFFIXES or any(name.endswith(ext) for ext in _ARCHIVE_SUFFIXES):
+            return 'archives'
+        return 'other'
+
+    def _collect_files(root_dir):
+        root = Path(root_dir)
+        return [p for p in root.rglob('*') if p.is_file()]
+
+    def _count_by_family(files):
+        counts = {'videos': 0, 'pictures': 0, 'archives': 0, 'other': 0}
+        for path in files:
+            counts[_family(path)] += 1
+        return counts
+
+    def _dup_count(rows, dup_thrsh):
+        return sum(1 for row in rows if row['similarity'] >= dup_thrsh)
+
+    label = kwargs.get('label', f'{Path(d1).name} vs {Path(d2).name}')
+    output_mode = kwargs.get('output_mode', 'both')
+    cutoff = kwargs.get('cutoff', DEFAULT_CUTOFF)
+    dup_thrsh = kwargs.get('dup_thrsh', 1 - DEFAULT_CUTOFF)
+    modes = kwargs.get('modes', ['all', 'same_strict', 'same_loose', 'videos'])
+
+    left_files = _collect_files(d1)
+    right_files = _collect_files(d2)
+    left_counts = _count_by_family(left_files)
+    right_counts = _count_by_family(right_files)
+    total_left = len(left_files)
+    total_right = len(right_files)
+
+    summary = []
+    for mode in modes:
+        t0 = time.perf_counter()
+        rows = compare_dirs(d1, d2, cutoff=cutoff, subdir=True, output_mode=output_mode, pairing_mode=mode)
+        elapsed = time.perf_counter() - t0
+        dups = _dup_count(rows, dup_thrsh)
+        summary.append({'mode': mode, 'rows': len(rows), 'dups': dups, 'elapsed_sec': elapsed})
+
+    print(f'\n=== Pairing Modes: {label} ===')
+    print(f'compare cutoff = {cutoff}')
+    print(f'dup threshold = {dup_thrsh:.3f}')
+    print(f'd1 files: total={total_left} videos={left_counts["videos"]} pictures={left_counts["pictures"]} archives={left_counts["archives"]} other={left_counts["other"]}')
+    print(f'd2 files: total={total_right} videos={right_counts["videos"]} pictures={right_counts["pictures"]} archives={right_counts["archives"]} other={right_counts["other"]}')
+    print('-' * 96)
+    print(f"{'mode':14} {'cmp_rows':>9} {'dups':>7} {'sec':>8}")
+    for item in summary:
+        print(f"{item['mode']:14} {item['rows']:9d} {item['dups']:7d} {item['elapsed_sec']:8.3f}")
+
+    return summary
+
 #* local runners
 
 def get_op_mod():
@@ -318,6 +382,7 @@ if __name__ == '__main__':
 
     ws_vids = "/mnt/local-data/Projects/Wesmart/Video-datasets/wesmart"
     mix_dir = test_root/'mix'
+    vid_dir = test_root/'vids'
     cache_dir = test_root/'cache'
     other_dirs = sorted(p for p in test_root.iterdir() if p.is_dir() and p.name!='mix')
     tst_cases = (['try_01 vs try_02', test_root/'try_01_cf', test_root/'try_02_cf'],
@@ -332,11 +397,12 @@ if __name__ == '__main__':
     # test_cf_unit(cases=tst_cases)
     print('\n' + '=' * 80 + '\n')
     opmod = 'cli-flash' # 'prog' if input(" 1) progress (1/p)\n 2) both (2/b)\n:") in ('1', 'p', 'P') else 'both'
-    opmod = get_op_mod()
-    test_cr_unit(test_root, output_mode=opmod);
+    # opmod = get_op_mod()
+    # test_cr_unit(test_root, output_mode=opmod);
     # print('\n' + '=2' * 80 + '\n')
-    test_dup_unit(cache_dir, mix_dir, label='cache vs mix', output_mode=opmod);   print('\n' + '=' * 80 + '\n')
+    # test_dup_unit(cache_dir, mix_dir, label='cache vs mix', output_mode=opmod);   print('\n' + '=' * 80 + '\n')
+    # test_pairing_modes(mix_dir, vid_dir, output_mode=opmod)
     # test_dup_unit(other_dirs, mix_dir, label='all dirs except mix vs mix', print_unique=True)
     print(f"Testing duration = {time.time()-t0:.3f}")
+    test_pairing_modes(mix_dir, test_root)
 #261(,4,)-> 251(,2,1)
-
