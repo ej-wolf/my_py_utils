@@ -24,6 +24,7 @@
 """
 
 import fnmatch
+import pickle
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Iterator
@@ -78,13 +79,13 @@ class _ReportBase:
         matched = [row for row in self._rows if self._row_matches(row, field, op, expected)]
         return ReportView(matched)
 
-    def filter(self, cutoff=_DEFULT_CUTOFF, criteria='difference'):
+    def filter(self, cutoff=_DEFULT_CUTOFF, criteria='difference', op='>='):
         criteria = self._normalize_criteria(criteria)
-        return ReportView(filter_results(self._rows, cutoff=cutoff, criteria=criteria))
+        return ReportView(filter_results(self._rows, cutoff=cutoff, criteria=criteria, op=op))
 
-    def sort(self, criteria='difference', order='increase', cutoff=None):
+    def sort(self, criteria='difference', order='increase', cutoff=None, op='>='):
         criteria = self._normalize_criteria(criteria)
-        kwargs = {'cutoff': cutoff} if cutoff is not None else {}
+        kwargs = {'cutoff': cutoff, 'op': op} if cutoff is not None else {}
         return ReportView(sort_results(self._rows, criteria=criteria, order=order, **kwargs))
 
     def print(self, **kwargs):
@@ -175,15 +176,13 @@ class _ReportBase:
         return op, value
 
     def _get_similarity(self, row: dict) -> float | None:
-        return row.get('similarity', row.get('info', {}).get('similarity'))
+        return row.get('similarity')
 
     def _get_complete(self, row: dict) -> float | None:
-        return row.get('complete', row.get('info', {}).get('complete'))
+        return row.get('complete')
 
     def _get_field_value(self, row: dict, field: str):
-        if field in row:
-            return row[field]
-        return row.get('info', {}).get(field)
+        return row.get(field)
 
     def _compare_values(self, actual, op: str, expected) -> bool:
         if op == '==':
@@ -240,6 +239,14 @@ class Report(_ReportBase):
     def from_dirs(cls, d1, d2=None, cutoff=_DEFULT_CUTOFF, output_mode='progress', **kwargs):
         return cls(compare_dirs(d1, d2=d2, cutoff=cutoff, output_mode=output_mode, **kwargs))
 
+    @classmethod
+    def load(cls, path: Path | str):
+        with Path(path).open('rb') as f:
+            rows = pickle.load(f)
+        return cls(_normalize_loaded_report(rows))
+
+    from_file = load
+
 
 class ReportView(_ReportBase):
     pass
@@ -260,11 +267,21 @@ def _canonical_row(row: dict) -> dict:
     if 'chunks num' in data and 'chunks_num' not in data:
         data['chunks_num'] = data.pop('chunks num')
 
-    info = data.get('info')
-    if isinstance(info, dict):
-        info = dict(info)
-        if 'chunks num' in info and 'chunks_num' not in info:
-            info['chunks_num'] = info.pop('chunks num')
-        data['info'] = info
-
     return data
+
+
+def _normalize_loaded_report(rows: list[dict]) -> list[dict]:
+    def normalize_row(row: dict) -> dict:
+        if not isinstance(row, dict): return row
+
+        data = _canonical_row(row)
+        info = data.pop('info', None)
+        if isinstance(info, dict):
+            info = _canonical_row(info)
+            for key in ('size', 'similarity', 'diff_bytes', 'chunks_num', 'complete', 'chunks', 'note'):
+                if key not in data and key in info:
+                    data[key] = info[key]
+
+        return data
+
+    return [normalize_row(row) for row in rows]

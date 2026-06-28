@@ -39,7 +39,7 @@ def compare_files(f1:str|Path, f2:str|Path, **kwargs) -> dict:
     cutoff = kwargs.pop('cutoff', DEFAULT_CUTOFF)
     progress_cb = kwargs.pop('progress_cb', None)
     compare_bytes = kwargs.pop('compare_bytes', True)
-    list_chunks = kwargs.pop('list_chunks', True)
+    list_chunks = kwargs.pop('list_chunks', False)
 
     f1, f2 = Path(f1), Path(f2)
     size1, size2 = f1.stat().st_size, f2.stat().st_size
@@ -204,11 +204,13 @@ def compare_lists(files1, files2=None, cutoff=DEFAULT_CUTOFF, output_mode='quiet
                                   pairing_mode=pairing_mode, **kwargs,)
 
 
-def filter_results(report, cutoff: float|int|None=DEFAULT_CUTOFF, criteria='difference'):
+def filter_results(report, cutoff: float|int|str|list|tuple|None=DEFAULT_CUTOFF, criteria='difference', op='>='):
     """ General filtering utility for report rows.
         :param report: ...
         :param numeric cutoff: treated as cutoff for similarity/difference
+        :param tuple/list cutoff: treated as inclusive bounds when op='range'
         :param string cutoff: treated as a filename mask (Pathlib style) file1 or file2
+        :param op: '<', '<=', '==', '>=', '>', or 'range' for numeric filters
         :param criteria:  'difference': keep rows with similarity >= (1 - cutoff)
                           'similarity': keep exact rows with similarity  >= cutoff
                           'similarity_max': keep rows with similarity   >= cutoff
@@ -217,6 +219,11 @@ def filter_results(report, cutoff: float|int|None=DEFAULT_CUTOFF, criteria='diff
                                            to file1 (default) or file2 if criteria='file2'
     """
     criteria = _normalize_criteria(criteria)
+    if not isinstance(cutoff, str):
+        numeric_match = _build_numeric_filter(cutoff, op)
+        difference_match = numeric_match
+        if criteria == 'difference' and op == '>=' and isinstance(cutoff, (int, float)):
+            difference_match = _build_numeric_filter(1 - cutoff, op)
 
     filtered = []
     for r in report:
@@ -226,27 +233,27 @@ def filter_results(report, cutoff: float|int|None=DEFAULT_CUTOFF, criteria='diff
                 filtered.append(r)
         else:
             if criteria in ('difference', 'similarity', 'similarity_max'):
-                value = r.get('similarity', r.get('info', {}).get('similarity'))
+                value = r.get('similarity')
                 if value is None:
                     continue
                 if criteria != 'similarity_max':
-                    complete = r.get('complete', r.get('info', {}).get('complete'))
+                    complete = r.get('complete')
                     if complete != 1.0:
                         continue
-                if criteria == 'difference' and value >= (1 - cutoff):
-                    filtered.append(r)
-                if criteria in ('similarity', 'similarity_max') and value >= cutoff:
+                if criteria == 'difference' and op == '>=':
+                    match = difference_match
+                elif criteria == 'difference':
+                    value, match = 1 - value, numeric_match
+                else:
+                    match = numeric_match
+                if match(value):
                     filtered.append(r)
                 continue
-
-            if criteria in r:
-                value = r.get(criteria)
-            else:
-                value = r.get('info', {}).get(criteria)
+            value = r.get(criteria)
 
             if value is None:
                 continue
-            if value >= cutoff:
+            if numeric_match(value):
                 filtered.append(r)
     return filtered
 
@@ -257,19 +264,20 @@ def sort_results(report, criteria='difference', order='increase', **kwargs):
     """
     criteria = _normalize_criteria(criteria)
     cutoff = kwargs.get('cutoff', None)
-    entries = filter_results(report, cutoff=cutoff, criteria=criteria) if cutoff is not None else list(report)
+    op = kwargs.get('op', '>=')
+    entries = filter_results(report, cutoff=cutoff, criteria=criteria, op=op) if cutoff is not None else list(report)
 
     desc_tokens = {'decrease', 'desc', 'descending', 'reverse'}
     reverse = str(order).lower() in desc_tokens
 
     if criteria == 'difference':
-        key_fn = lambda r: 1 - (r.get('similarity', r.get('info', {}).get('similarity', 0.0)) or 0.0)
+        key_fn = lambda r: 1 - (r.get('similarity', 0.0) or 0.0)
     elif criteria in ('similarity', 'similarity_max'):
-        key_fn = lambda r: r.get('similarity', r.get('info', {}).get('similarity', 0.0)) or 0.0
+        key_fn = lambda r: r.get('similarity', 0.0) or 0.0
     elif criteria in ('file1', 'file2'):
         key_fn = lambda r: Path(r.get(criteria, '')).name
     else:
-        key_fn = lambda r: r.get(criteria, r.get('info', {}).get(criteria))
+        key_fn = lambda r: r.get(criteria)
 
     return sorted(entries, key=key_fn, reverse=reverse)
 
@@ -323,6 +331,8 @@ def quick_print(report, **kwargs):
 def save_report(report: list, path: Path | str = None, **kwargs):
     """ Save a report list as pickle with optional chunk stripping and key normalization."""
 
+    old_info_detected = False
+
     def normalize_keys(data: dict):
         if legacy:
             return
@@ -330,17 +340,20 @@ def save_report(report: list, path: Path | str = None, **kwargs):
             data['chunks_num'] = data.pop('chunks num')
 
     def prepare_item(item):
+        nonlocal old_info_detected
         if not isinstance(item, dict):
             return item
 
         row = dict(item)
         normalize_keys(row)
-        info = row.get('info')
+        info = row.pop('info', None)
         if isinstance(info, dict):
-            row['info'] = dict(info)
-            normalize_keys(row['info'])
-            if not save_chunks:
-                row['info']['chunks'] = None
+            old_info_detected = True
+            info = dict(info)
+            normalize_keys(info)
+            for key in ('size', 'similarity', 'diff_bytes', 'chunks_num', 'complete', 'chunks', 'note'):
+                if key not in row and key in info:
+                    row[key] = info[key]
 
         if not save_chunks and 'chunks' in row:
             row['chunks'] = None
@@ -372,6 +385,9 @@ def save_report(report: list, path: Path | str = None, **kwargs):
     target.parent.mkdir(parents=True, exist_ok=True)
 
     payload = [prepare_item(item) for item in report]
+    if old_info_detected:
+        print_color('Detected old report rows with nested info; saving in the new flat format.', 'y')
+
     with target.open('wb') as f:
         pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -396,6 +412,41 @@ def _normalize_error_handling(mode: str) -> str:
 
 def _normalize_criteria(criteria: str) -> str:
     return _CRITERIA_ALIASES.get(criteria, criteria)
+
+
+def _build_numeric_filter(cutoff, op='>='):
+    op = str(op).strip().lower()
+    if op == '=':
+        op = '=='
+
+    if op == 'range':
+        if not isinstance(cutoff, (list, tuple)) or len(cutoff) != 2:
+            print_color('[WARN] range filter expects cutoff=(min, max).', 'y')
+            return lambda value: False
+        if not all(isinstance(v, (int, float)) for v in cutoff):
+            print_color('[WARN] range filter cutoff values must be numeric.', 'y')
+            return lambda value: False
+        low, high = sorted(cutoff)
+        return lambda value: low <= value <= high
+
+    valid_ops = {'<', '<=', '==', '>=', '>'}
+    if op not in valid_ops:
+        print_color(f"[WARN] unsupported filter op '{op}', using '>='.", 'y')
+        op = '>='
+
+    if not isinstance(cutoff, (int, float)):
+        print_color(f"[WARN] numeric filter expects numeric cutoff, got {type(cutoff).__name__}.", 'y')
+        return lambda value: False
+
+    if op == '<':
+        return lambda value: value < cutoff
+    if op == '<=':
+        return lambda value: value <= cutoff
+    if op == '==':
+        return lambda value: value == cutoff
+    if op == '>':
+        return lambda value: value > cutoff
+    return lambda value: value >= cutoff
 
 
 def _archive_suffix(path: Path) -> str | None:
@@ -670,7 +721,8 @@ def _compare_pairs(pairs, cutoff=DEFAULT_CUTOFF, output_mode='prog', **kwargs):
                 'diff_bytes': info['diff_bytes'],
                 'chunks_num': info['chunks_num'],
                 'complete': info['complete'],
-                'info': info,
+                'chunks': info['chunks'],
+                'note': info['note'],
                 }
         if min_complete is None or row['complete'] >= min_complete:
             report.append(row)
@@ -834,3 +886,4 @@ def _run_prepared_compare(files1, files2=None, *, cutoff, output_mode, pairing_m
 
 #808(2,6,1) -> 784#(2,4,) -> 775->755
 #842(2,5,) cln-up->  830
+#'op' added  893(3,2,)
