@@ -2,6 +2,7 @@ import time
 import io
 import fnmatch
 import contextlib
+import pickle
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -69,6 +70,8 @@ def test_cf_unit(cases, cutoff=DEFAULT_CUTOFF, **kwargs):
 
                 files_compared = len(dir_rows)
                 for row in dir_rows:
+                    if 'info' in row or 'chunks' not in row or 'note' not in row:
+                        raise AssertionError('compare_dirs row schema should be flat')
                     similarities.append(row['similarity'])
                     diff_bytes += row['diff_bytes']
                     if row['diff_bytes'] == 0:
@@ -183,6 +186,17 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs): 
     _check('similarity exact-only', len(report.where('similarity', '>', 0.94)) < len(report.where('sim_max', '>', 0.94)))
     _check('filter delegates', len(report.filter(cutoff=0.05, criteria='dif')) == len(filter_results(report.rows, cutoff=0.05, criteria='dif')))
 
+    filter_rows = Report([
+        {'file1': 'a', 'file2': 'b', 'size': 10, 'similarity': 0.2, 'diff_bytes': 8, 'complete': 1.0},
+        {'file1': 'c', 'file2': 'd', 'size': 10, 'similarity': 0.5, 'diff_bytes': 5, 'complete': 1.0},
+        {'file1': 'e', 'file2': 'f', 'size': 10, 'similarity': 0.5, 'diff_bytes': 5, 'complete': 0.6},
+        {'file1': 'g', 'file2': 'h', 'size': 10, 'similarity': 0.9, 'diff_bytes': 1, 'complete': 1.0},
+    ])
+    _check('filter sim <=', len(filter_rows.filter(cutoff=0.5, criteria='sim', op='<=')) == 2)
+    _check('filter sim_max <=', len(filter_rows.filter(cutoff=0.5, criteria='sim_max', op='<=')) == 3)
+    _check('filter sim range', len(filter_rows.filter(cutoff=(0.4, 0.8), criteria='sim', op='range')) == 1)
+    _check('filter sim_max range', len(filter_rows.filter(cutoff=(0.4, 0.8), criteria='sim_max', op='range')) == 2)
+
     sorted_view = report.sort(criteria='sim_max', order='decrease')
     similarities = sorted_view['similarity']
     _check('sort delegates', similarities == sorted(similarities, reverse=True))
@@ -196,6 +210,37 @@ def test_cr_unit(test_root: Path | str = 'test_data', tst_msk='*.*', **kwargs): 
     with TemporaryDirectory() as td:
         target = report.save(Path(td))
         _check('save report', target.is_file(), str(target))
+        old_row = {
+            'file1': 'old-a',
+            'file2': 'old-b',
+            'size': 10,
+            'similarity': 0.5,
+            'diff_bytes': 5,
+            'chunks_num': 1,
+            'complete': 1.0,
+            'info': {'chunks': [{'chunk': '0001'}], 'note': 'old note'},
+        }
+        old_target = Path(td) / 'old_report.pkl'
+        save_notice = _capture_output(lambda: Report([old_row]).save(old_target))
+        with old_target.open('rb') as f:
+            saved_old = pickle.load(f)[0]
+        _check('save normalizes old info', 'info' not in saved_old and saved_old.get('note') == 'old note')
+        _check('save strips chunks by default', saved_old.get('chunks') is None)
+        _check('save old info notice', 'nested info' in save_notice)
+
+        chunks_target = Path(td) / 'old_report_chunks.pkl'
+        _capture_output(lambda: Report([old_row]).save(chunks_target, save_chunks=True))
+        with chunks_target.open('rb') as f:
+            saved_chunks = pickle.load(f)[0]
+        _check('save preserves chunks when requested', saved_chunks.get('chunks') == [{'chunk': '0001'}])
+
+        raw_old_target = Path(td) / 'raw_old_report.pkl'
+        with raw_old_target.open('wb') as f:
+            pickle.dump([old_row], f)
+        loaded_old = Report.load(raw_old_target)
+        _check('load normalizes old info', 'info' not in loaded_old[0] and loaded_old[0].get('note') == 'old note')
+        loaded_alias = Report.from_file(raw_old_target)
+        _check('from_file alias loads', isinstance(loaded_alias, Report) and len(loaded_alias) == 1)
 
     row_a = {'file1': 'a', 'file2': 'b', 'size': 1, 'similarity': 1.0, 'diff_bytes': 0, 'complete': 1.0}
     row_b = {'file1': 'c', 'file2': 'd', 'size': 2, 'similarity': 0.9, 'diff_bytes': 1, 'complete': 1.0}

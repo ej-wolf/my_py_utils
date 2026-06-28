@@ -155,12 +155,12 @@ def _build_dup_data(file1, report, **kwargs) -> dict:
                 last_pct = _print_progress('analyzing rows', idx, len(rows), last_pct)
             continue
 
-        similarity = float(row.get('similarity', row.get('info', {}).get('similarity', 0.0)) or 0.0)
-        complete = float(row.get('complete', row.get('info', {}).get('complete', 0.0)) or 0.0)
+        similarity = float(row.get('similarity', 0.0) or 0.0)
+        complete = float(row.get('complete', 0.0) or 0.0)
         match = {'file2': str(file2_path),
                  'similarity': similarity,
                  'complete': complete,
-                 'size_bytes': int(row.get('size', row.get('info', {}).get('size', 0)) or 0),
+                 'size_bytes': int(row.get('size', 0) or 0),
                  'row': row,
                  }
         if similarity >= 1.0 and complete >= 1.0:
